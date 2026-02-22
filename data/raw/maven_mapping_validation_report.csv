@@ -1,0 +1,6 @@
+table,rule,severity,issue_count,detail
+sessions,validation_passed,info,0,All table-level validation checks passed.
+customers,validation_passed,info,0,All table-level validation checks passed.
+orders,validation_passed,info,0,All table-level validation checks passed.
+refunds,validation_passed,info,0,All table-level validation checks passed.
+marketing_spend,validation_passed,info,0,All table-level validation checks passed.

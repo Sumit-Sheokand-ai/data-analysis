@@ -1,0 +1,62 @@
+# D2C Multi-Channel Marketing & Customer Profitability Analytics
+End-to-end analytics project for a D2C brand with:
+- SQL-first cleaning/modeling (PostgreSQL scripts)
+- Python KPI analysis (CAC, retention, realized + predictive LTV)
+- Streamlit web app dashboard
+- Scheduled pipeline (GitHub Actions)
+
+## Project structure
+- `data/raw/` raw source CSVs (sample + synthetic)
+- `data/processed/` generated KPI outputs for the dashboard
+- `sql/staging/` cleaning and standardization SQL
+- `sql/marts/` curated fact/mart SQL for analytics
+- `sql/quality/` data quality checks
+- `python/analysis/` reusable analytics modules
+- `python/pipeline/` CLI entrypoint for refresh
+- `app/` Streamlit dashboard
+- `tests/` KPI tests
+- `.github/workflows/` scheduled pipeline workflow
+- `docs/` data dictionary, KPI definitions, deployment notes
+
+## KPI scope
+- **CAC** (channel-level, last-non-direct-touch attribution on first order)
+- **Retention rate** (cohort-based monthly retention)
+- **LTV**
+  - Realized LTV: cumulative contribution margin per customer
+  - Predictive LTV: BG/NBD + Gamma-Gamma (fallback proxy if model is not fit-ready)
+- **Profitability**: LTV:CAC ratio and estimated payback period
+
+## Quick start
+1. Create and activate a Python environment.
+2. Install dependencies:
+   - `pip install -r requirements.txt`
+3. Run pipeline using sample CSV data:
+   - `python -m python.pipeline.run_pipeline --data-source csv --validation-mode strict`
+4. Launch dashboard:
+   - `streamlit run app/main.py`
+## Real export connectors (Shopify + GA4)
+Map real platform exports into canonical raw tables:
+- `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`
+
+Connector details and template headers are in `docs/connectors.md` and `data/raw/templates/`.
+
+## Optional PostgreSQL mode
+Set `DATABASE_URL` in `.env` and run:
+- `python -m python.pipeline.run_pipeline --data-source postgres --validation-mode strict`
+
+The SQL models in `sql/` can be run in order:
+1. `sql/staging/00_setup_raw_tables.sql`
+2. `sql/staging/*.sql`
+3. `sql/marts/*.sql`
+4. `sql/quality/01_data_quality_checks.sql`
+
+## Refresh cadence (v1)
+- Every 6 hours: incremental pipeline run
+- Daily: full refresh
+
+## Notes
+- The included raw CSVs are starter synthetic data for development.
+- For production-like behavior, replace/add real D2C exports while keeping the same contract.
+- Validation defaults to strict fail-fast mode for reliability; use `--validation-mode warn` only for exploratory ingestion.
+- Strict mode enforces business-rule checks too (for example: `clicks <= impressions`, `discount <= gross_revenue`, `refund_amount <= order_gross`, and temporal consistency checks).
+- The pipeline also writes `anomaly_report.csv` with warning-level monitoring for CAC spikes, conversion-rate spikes, and refund-ratio spikes.

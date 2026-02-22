@@ -1,0 +1,2 @@
+table,rule,severity,issue_count,detail
+marketing_spend,validation_passed,info,0,All table-level validation checks passed.

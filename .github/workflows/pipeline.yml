@@ -1,0 +1,35 @@
+name: d2c-analytics-pipeline
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+    - cron: "15 2 * * *"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline (CSV fallback)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            python -m python.pipeline.run_pipeline --data-source postgres --database-url "$DATABASE_URL"
+          else
+            python -m python.pipeline.run_pipeline --data-source csv
+          fi
+
+      - name: Run tests
+        run: pytest -q

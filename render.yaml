@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: d2c-analytics-webapp
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: DATA_SOURCE
+        value: csv
+      - key: RAW_DATA_DIR
+        value: /opt/render/project/src/data/raw
+      - key: PROCESSED_DATA_DIR
+        value: /opt/render/project/src/data/processed
+      - key: APP_AUTO_RUN_PIPELINE_ON_START
+        value: "1"
+      - key: VALIDATION_MODE
+        value: warn
