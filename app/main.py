@@ -1,17 +1,28 @@
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT_STR = str(PROJECT_ROOT)
+PYTHON_DIR_STR = str(PROJECT_ROOT / "python")
+if PROJECT_ROOT_STR not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT_STR)
+if PYTHON_DIR_STR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR_STR)
 
+try:
+    from python.analysis.pipeline import run_pipeline
+except ModuleNotFoundError:
+    from analysis.pipeline import run_pipeline
 from python.analysis.pipeline import run_pipeline
 
 load_dotenv()
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = Path(os.getenv("RAW_DATA_DIR", PROJECT_ROOT / "data" / "raw"))
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 APP_DATA_SOURCE = os.getenv("DATA_SOURCE", "csv").strip().lower()
