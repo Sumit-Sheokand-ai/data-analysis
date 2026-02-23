@@ -174,6 +174,7 @@ def map_maven_fuzzy_factory(
     output_dir: Path,
     validation_mode: str,
     marketing_spend_input_csv: Path | None = None,
+    allow_proxy_marketing_spend: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     sessions_src = pd.read_csv(input_dir / "website_sessions.csv")
     orders_src = pd.read_csv(input_dir / "orders.csv")
@@ -183,11 +184,15 @@ def map_maven_fuzzy_factory(
     orders = _build_orders(orders_src, refunds_src)
     refunds = _build_refunds(refunds_src)
     customers = _build_customers(sessions, orders)
-    marketing_spend = (
-        map_ad_spend_export(marketing_spend_input_csv, output_dir / "raw_marketing_spend.csv")
-        if marketing_spend_input_csv is not None
-        else _build_marketing_spend(sessions)
-    )
+    if marketing_spend_input_csv is not None:
+        marketing_spend = map_ad_spend_export(marketing_spend_input_csv, output_dir / "raw_marketing_spend.csv")
+    elif allow_proxy_marketing_spend:
+        marketing_spend = _build_marketing_spend(sessions)
+    else:
+        raise ValueError(
+            "Real marketing spend CSV is required. Provide --marketing-spend-csv, "
+            "or pass --allow-proxy-marketing-spend to generate proxy spend."
+        )
 
     tables = {
         "sessions": sessions,
@@ -227,7 +232,12 @@ def main() -> None:
     parser.add_argument(
         "--marketing-spend-csv",
         default="",
-        help="Optional ad-platform spend export CSV. If provided, replaces proxy marketing spend from sessions.",
+        help="Ad-platform spend export CSV used to create raw_marketing_spend.csv.",
+    )
+    parser.add_argument(
+        "--allow-proxy-marketing-spend",
+        action="store_true",
+        help="Allow proxy marketing spend generation from sessions when real spend file is not provided.",
     )
     parser.add_argument("--validation-mode", choices=["strict", "warn"], default="strict")
     args = parser.parse_args()
@@ -237,6 +247,7 @@ def main() -> None:
         Path(args.output_dir),
         validation_mode=args.validation_mode,
         marketing_spend_input_csv=marketing_spend_input,
+        allow_proxy_marketing_spend=args.allow_proxy_marketing_spend,
     )
     print(
         "Generated canonical raw files from Maven Fuzzy Factory dataset: "
