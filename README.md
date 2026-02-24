@@ -40,6 +40,9 @@ End-to-end analytics project for a D2C brand with:
 - Billing page with plan limits + usage counters
 - Feature gating for advanced pages and alert workflows
 - Scheduled report setup + export usage metering
+- Connectors & Sync control center with connector health checks
+- What Changed diagnostics using previous-vs-current KPI snapshots
+- Alert destination manager (email/webhook test dispatch)
 
 ### Optional environment variables for billing UX
 - `APP_PLAN` (default: `starter`)
@@ -48,6 +51,9 @@ End-to-end analytics project for a D2C brand with:
 - `APP_STRIPE_PORTAL_URL` (billing portal link)
 - `APP_CONTACT_SALES_URL` (enterprise/contact sales link)
 - `APP_TRIAL_END_DATE` (display trial expiry in sidebar)
+- `APP_SYNC_DEFAULT_FREQUENCY` (default sync job frequency, e.g. `daily`)
+- `APP_SYNC_DEFAULT_HOUR_UTC` (default UTC hour for sync jobs)
+- `APP_WEBHOOK_TIMEOUT_SECONDS` (timeout for webhook test dispatch)
 ## Real export connectors (Shopify + GA4)
 Map real platform exports into canonical raw tables:
 - `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`

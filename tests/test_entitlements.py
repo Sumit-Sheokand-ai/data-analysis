@@ -24,6 +24,8 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("starter", "core_dashboards")
     assert not has_feature("starter", "scheduled_reports")
     assert has_feature("growth", "scheduled_reports")
+    assert has_feature("growth", "connector_sync")
+    assert has_feature("growth", "what_changed_diagnostics")
     assert has_feature("pro", "slack_webhooks")
 
 

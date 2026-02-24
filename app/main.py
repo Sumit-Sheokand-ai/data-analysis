@@ -1,9 +1,14 @@
 from __future__ import annotations
 import os
 import sys
+import json
+import shutil
 from pathlib import Path
 from io import BytesIO
+from datetime import datetime, timezone
 from zipfile import BadZipFile, ZipFile
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -47,6 +52,18 @@ except ModuleNotFoundError:
         next_plan_for_feature,
         normalize_plan_slug,
     )
+try:
+    from python.analysis.diagnostics import (
+        build_channel_metric_deltas,
+        build_overview_deltas,
+        load_snapshot_csv,
+    )
+except ModuleNotFoundError:
+    from analysis.diagnostics import (
+        build_channel_metric_deltas,
+        build_overview_deltas,
+        load_snapshot_csv,
+    )
 
 load_dotenv()
 
@@ -63,7 +80,11 @@ APP_STRIPE_CHECKOUT_URL = os.getenv("APP_STRIPE_CHECKOUT_URL", "").strip()
 APP_STRIPE_PORTAL_URL = os.getenv("APP_STRIPE_PORTAL_URL", "").strip()
 APP_CONTACT_SALES_URL = os.getenv("APP_CONTACT_SALES_URL", "").strip()
 APP_TRIAL_END_DATE = os.getenv("APP_TRIAL_END_DATE", "").strip()
+APP_SYNC_DEFAULT_FREQUENCY = os.getenv("APP_SYNC_DEFAULT_FREQUENCY", "daily").strip().lower()
+APP_SYNC_DEFAULT_HOUR_UTC = int(os.getenv("APP_SYNC_DEFAULT_HOUR_UTC", "2").strip() or 2)
+APP_WEBHOOK_TIMEOUT_SECONDS = int(os.getenv("APP_WEBHOOK_TIMEOUT_SECONDS", "10").strip() or 10)
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
+PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 
 REQUIRED_OUTPUTS = [
     "kpi_overview",
@@ -80,6 +101,8 @@ PAGE_FEATURE_REQUIREMENTS = {
     "Anomaly Alerts": "alert_actions",
     "Budget Planner": "scenario_planner",
     "Scheduled Reports": "scheduled_reports",
+    "Connectors & Sync": "connector_health",
+    "What Changed": "what_changed_diagnostics",
 }
 
 CANONICAL_RAW_FILES = {
@@ -92,6 +115,8 @@ CANONICAL_RAW_FILES = {
 UPLOAD_SESSION_FLAG = "user_uploaded_data_this_session"
 ACTIVE_PLAN_STATE_KEY = "active_plan_slug"
 USAGE_COUNTERS_STATE_KEY = "usage_counters"
+ALERT_DESTINATIONS_STATE_KEY = "alert_destinations"
+SYNC_JOBS_STATE_KEY = "sync_jobs"
 
 CORE_PAGES = [
     "No-Code Upload Center",
@@ -101,6 +126,8 @@ CORE_PAGES = [
     "Billing & Plan",
 ]
 ADVANCED_PAGES = [
+    "Connectors & Sync",
+    "What Changed",
     "Cohort Retention & LTV",
     "Customer Profitability",
     "Anomaly Alerts",
@@ -145,7 +172,9 @@ def _get_usage_counters() -> dict[str, int]:
             "report_exports": 0,
             "scheduled_reports_created": 0,
             "pipeline_runs": 0,
+            "connector_sync_runs": 0,
             "alerts_acknowledged": 0,
+            "alert_dispatches": 0,
         }
     return st.session_state[USAGE_COUNTERS_STATE_KEY]
 
@@ -154,6 +183,151 @@ def _increment_usage_counter(counter_name: str, amount: int = 1) -> None:
     counters = _get_usage_counters()
     counters[counter_name] = int(counters.get(counter_name, 0)) + int(amount)
     st.session_state[USAGE_COUNTERS_STATE_KEY] = counters
+
+
+def _get_alert_destinations() -> list[dict[str, str]]:
+    if ALERT_DESTINATIONS_STATE_KEY not in st.session_state:
+        st.session_state[ALERT_DESTINATIONS_STATE_KEY] = []
+    return st.session_state[ALERT_DESTINATIONS_STATE_KEY]
+
+
+def _add_alert_destination(destination_type: str, target: str, label: str) -> None:
+    destinations = _get_alert_destinations()
+    destinations.append(
+        {
+            "type": destination_type.strip().lower(),
+            "target": target.strip(),
+            "label": label.strip() or destination_type.strip().title(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+
+
+def _remove_alert_destination(index: int) -> None:
+    destinations = _get_alert_destinations()
+    if 0 <= index < len(destinations):
+        destinations.pop(index)
+        st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+
+
+def _send_test_webhook(url: str, payload: dict) -> tuple[bool, str]:
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib_request.Request(
+            url=url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib_request.urlopen(req, timeout=APP_WEBHOOK_TIMEOUT_SECONDS) as resp:  # nosec B310
+            code = int(getattr(resp, "status", 200))
+        if 200 <= code < 300:
+            return True, f"Webhook accepted (HTTP {code})."
+        return False, f"Webhook returned HTTP {code}."
+    except urllib_error.URLError as exc:
+        return False, f"Webhook request failed: {exc}"
+    except Exception as exc:
+        return False, f"Webhook error: {exc}"
+
+
+def _dispatch_sample_alert_to_destinations() -> tuple[int, int, list[str]]:
+    destinations = _get_alert_destinations()
+    if not destinations:
+        return 0, 0, []
+    success = 0
+    fail = 0
+    messages: list[str] = []
+    payload = {
+        "event": "anomaly_test_alert",
+        "severity": "warn",
+        "detail": "Test dispatch from D2C analytics app",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    for destination in destinations:
+        d_type = destination.get("type", "")
+        d_target = destination.get("target", "")
+        d_label = destination.get("label", d_type)
+        if d_type == "webhook":
+            ok, msg = _send_test_webhook(d_target, payload)
+            if ok:
+                success += 1
+            else:
+                fail += 1
+            messages.append(f"{d_label}: {msg}")
+        elif d_type == "email":
+            success += 1
+            messages.append(f"{d_label}: queued (email delivery worker not configured yet).")
+        else:
+            fail += 1
+            messages.append(f"{d_label}: unsupported destination type `{d_type}`.")
+    return success, fail, messages
+
+
+def _get_sync_jobs() -> list[dict[str, str]]:
+    if SYNC_JOBS_STATE_KEY not in st.session_state:
+        st.session_state[SYNC_JOBS_STATE_KEY] = []
+    return st.session_state[SYNC_JOBS_STATE_KEY]
+
+
+def _upsert_default_sync_job() -> None:
+    jobs = _get_sync_jobs()
+    if jobs:
+        return
+    jobs.append(
+        {
+            "name": "Primary D2C Sync",
+            "frequency": APP_SYNC_DEFAULT_FREQUENCY,
+            "hour_utc": str(APP_SYNC_DEFAULT_HOUR_UTC),
+            "status": "enabled",
+        }
+    )
+    st.session_state[SYNC_JOBS_STATE_KEY] = jobs
+
+
+def _build_connector_health_table() -> pd.DataFrame:
+    rows: list[dict[str, str | int | bool]] = []
+    for dataset, filename in CANONICAL_RAW_FILES.items():
+        path = RAW_DIR / filename
+        exists = path.exists()
+        row_count = 0
+        modified_utc = ""
+        freshness = "missing"
+        if exists:
+            try:
+                row_count = len(pd.read_csv(path))
+            except Exception:
+                row_count = -1
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            modified_utc = mtime.isoformat()
+            age_hours = (datetime.now(timezone.utc) - mtime).total_seconds() / 3600.0
+            freshness = "fresh" if age_hours <= 72 else "stale"
+        rows.append(
+            {
+                "connector": dataset,
+                "file": filename,
+                "available": exists,
+                "rows": row_count,
+                "last_modified_utc": modified_utc,
+                "freshness": freshness,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _backup_processed_outputs_before_run() -> None:
+    if not PROCESSED_DIR.exists():
+        return
+    PREVIOUS_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    for name in REQUIRED_OUTPUTS:
+        src = PROCESSED_DIR / f"{name}.csv"
+        if src.exists():
+            dst = PREVIOUS_OUTPUTS_DIR / src.name
+            shutil.copy2(src, dst)
+
+
+def _load_previous_output(name: str) -> pd.DataFrame:
+    return load_snapshot_csv(PREVIOUS_OUTPUTS_DIR / f"{name}.csv")
 
 
 def _available_pages_for_current_plan(show_advanced_pages: bool) -> list[str]:
@@ -330,6 +504,7 @@ def _ensure_processed_outputs() -> tuple[bool, str]:
         return False, f"Unsupported DATA_SOURCE `{APP_DATA_SOURCE}`. Use `csv` or `postgres`."
     if APP_VALIDATION_MODE not in {"strict", "warn"}:
         return False, f"Unsupported VALIDATION_MODE `{APP_VALIDATION_MODE}`. Use `strict` or `warn`."
+    _backup_processed_outputs_before_run()
 
     try:
         run_pipeline(
@@ -351,6 +526,7 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
     mode = validation_mode.strip().lower()
     if mode not in {"strict", "warn"}:
         mode = "warn"
+    _backup_processed_outputs_before_run()
     try:
         run_pipeline(
             data_source=APP_DATA_SOURCE,
@@ -361,6 +537,7 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Pipeline run failed: {exc}"
     _increment_usage_counter("pipeline_runs")
+    _increment_usage_counter("connector_sync_runs")
     return True, f"Pipeline completed in `{mode}` mode."
 
 
@@ -1072,8 +1249,181 @@ def show_scheduled_reports(data: dict[str, pd.DataFrame]) -> None:
         _increment_usage_counter("report_exports")
 
 
+def _render_alert_destination_manager() -> None:
+    st.markdown("### Alert Destinations")
+    if not _has_entitlement("email_alerts") and not _has_entitlement("webhook_alerts"):
+        _show_upgrade_cta(
+            feature="email_alerts",
+            reason="Destination alerting is not available on your current plan.",
+        )
+        return
+
+    plan = _current_plan()
+    destinations = _get_alert_destinations()
+    max_destinations = int(plan.limits.get("alert_destinations", 0))
+    st.caption(f"Configured destinations: {len(destinations)}/{max_destinations}")
+
+    if destinations:
+        destination_df = pd.DataFrame(destinations)
+        st.dataframe(destination_df, use_container_width=True, hide_index=True)
+
+    options = []
+    if _has_entitlement("email_alerts"):
+        options.append("email")
+    if _has_entitlement("webhook_alerts") or _has_entitlement("slack_webhooks"):
+        options.append("webhook")
+    destination_type = st.selectbox("Destination Type", options=options, key="dest_type")
+    destination_label = st.text_input("Destination Label", value="", key="dest_label")
+    destination_target = st.text_input(
+        "Target (email address or webhook URL)",
+        value="",
+        key="dest_target",
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Add Destination", use_container_width=True):
+            if len(destinations) >= max_destinations:
+                _show_upgrade_cta(
+                    feature="email_alerts",
+                    reason=f"You reached destination limit ({max_destinations}) for this plan.",
+                )
+            elif not destination_target.strip():
+                st.error("Target is required.")
+            elif destination_type == "webhook" and not destination_target.strip().lower().startswith(("http://", "https://")):
+                st.error("Webhook target must start with http:// or https://")
+            else:
+                _add_alert_destination(destination_type, destination_target, destination_label)
+                st.success("Destination added.")
+    with c2:
+        if st.button("Send Test Alert", use_container_width=True):
+            ok_count, fail_count, messages = _dispatch_sample_alert_to_destinations()
+            if ok_count + fail_count == 0:
+                st.info("No destinations configured.")
+            else:
+                _increment_usage_counter("alert_dispatches")
+                st.success(f"Test dispatch complete: {ok_count} succeeded, {fail_count} failed.")
+                if messages:
+                    st.code("\n".join(messages))
+
+    if destinations:
+        remove_index = st.selectbox(
+            "Remove destination",
+            options=list(range(len(destinations))),
+            format_func=lambda idx: f"{destinations[idx].get('label', 'destination')} ({destinations[idx].get('type', '')})",
+            key="dest_remove_index",
+        )
+        if st.button("Remove Selected Destination", use_container_width=True):
+            _remove_alert_destination(int(remove_index))
+            st.success("Destination removed.")
+
+
+def show_connectors_and_sync(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Connectors & Sync")
+    if not _has_entitlement("connector_health"):
+        _show_upgrade_cta(
+            feature="connector_health",
+            reason="Connector health monitoring is not available on your current plan.",
+        )
+        return
+
+    health = _build_connector_health_table()
+    if health.empty:
+        st.info("No connector health data available yet.")
+    else:
+        fresh_count = int((health["freshness"] == "fresh").sum()) if "freshness" in health.columns else 0
+        available_count = int(health["available"].sum()) if "available" in health.columns else 0
+        h1, h2, h3 = st.columns(3)
+        h1.metric("Connectors Available", available_count)
+        h2.metric("Fresh Connectors", fresh_count)
+        h3.metric("Total Connectors", len(health))
+        st.dataframe(health, use_container_width=True, hide_index=True)
+
+    st.markdown("### Sync Jobs")
+    if not _has_entitlement("connector_sync"):
+        _show_upgrade_cta(
+            feature="connector_sync",
+            reason="Scheduled sync jobs are available on Growth and above.",
+        )
+        return
+
+    _upsert_default_sync_job()
+    jobs = _get_sync_jobs()
+    jobs_df = pd.DataFrame(jobs)
+    st.dataframe(jobs_df, use_container_width=True, hide_index=True)
+    sync_frequency = st.selectbox(
+        "Sync Frequency",
+        options=["hourly", "daily", "weekly"],
+        index=1 if APP_SYNC_DEFAULT_FREQUENCY not in {"hourly", "weekly"} else (0 if APP_SYNC_DEFAULT_FREQUENCY == "hourly" else 2),
+        key="sync_frequency",
+    )
+    sync_hour = st.number_input("Sync Hour (UTC)", min_value=0, max_value=23, value=max(min(APP_SYNC_DEFAULT_HOUR_UTC, 23), 0), step=1)
+    sync_status = st.selectbox("Sync Status", options=["enabled", "paused"], index=0)
+    if st.button("Save Sync Job", use_container_width=True):
+        st.session_state[SYNC_JOBS_STATE_KEY] = [
+            {
+                "name": "Primary D2C Sync",
+                "frequency": str(sync_frequency),
+                "hour_utc": str(int(sync_hour)),
+                "status": str(sync_status),
+            }
+        ]
+        st.success("Sync job saved.")
+    if st.button("Run Sync Now", use_container_width=True):
+        with st.spinner("Running connector sync..."):
+            ok, message = _run_pipeline_now("warn")
+        if ok:
+            st.success(message)
+        else:
+            st.error(message)
+
+
+def show_what_changed(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("What Changed")
+    if not _has_entitlement("what_changed_diagnostics"):
+        _show_upgrade_cta(
+            feature="what_changed_diagnostics",
+            reason="What-changed diagnostics are available on Growth and above.",
+        )
+        return
+
+    previous_overview = _load_previous_output("kpi_overview")
+    previous_cac = _load_previous_output("cac_by_channel")
+    previous_profitability = _load_previous_output("channel_profitability")
+    if previous_overview.empty and previous_cac.empty and previous_profitability.empty:
+        st.info("No previous snapshot found yet. Run pipeline at least twice to activate diagnostics.")
+        return
+
+    overview_deltas = build_overview_deltas(data.get("overview", pd.DataFrame()), previous_overview)
+    cac_deltas = build_channel_metric_deltas(data.get("cac", pd.DataFrame()), previous_cac, metric_col="cac")
+    ratio_deltas = build_channel_metric_deltas(
+        data.get("profitability", pd.DataFrame()),
+        previous_profitability,
+        metric_col="ltv_cac_ratio",
+    )
+
+    if not overview_deltas.empty:
+        top_abs = overview_deltas.reindex(overview_deltas["delta"].abs().sort_values(ascending=False).index).head(1)
+        if not top_abs.empty:
+            row = top_abs.iloc[0]
+            st.success(
+                f"Largest movement: `{row['metric']}` changed by {row['delta']:.2f} "
+                f"({row['delta_pct']:.1f}% vs previous snapshot)."
+            )
+        st.markdown("### KPI Delta vs Previous Snapshot")
+        st.dataframe(overview_deltas, use_container_width=True, hide_index=True)
+
+    if not cac_deltas.empty:
+        st.markdown("### CAC Delta by Channel")
+        st.dataframe(cac_deltas, use_container_width=True, hide_index=True)
+
+    if not ratio_deltas.empty:
+        st.markdown("### LTV:CAC Ratio Delta by Channel")
+        st.dataframe(ratio_deltas, use_container_width=True, hide_index=True)
+
+
 def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Anomaly Alerts")
+    _render_alert_destination_manager()
     anomaly = _normalize_alert_state(_prepare_anomaly(data["anomaly"]))
     if anomaly.empty:
         st.info("No anomaly report found.")
@@ -1159,6 +1509,8 @@ def main() -> None:
     page_renderer = {
         "Executive Overview": show_overview,
         "Channel Performance": show_channel_performance,
+        "Connectors & Sync": show_connectors_and_sync,
+        "What Changed": show_what_changed,
         "Cohort Retention & LTV": show_retention_ltv,
         "Customer Profitability": show_customer_profitability,
         "Data Quality": show_data_quality,
