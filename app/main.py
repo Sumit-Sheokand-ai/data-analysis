@@ -89,6 +89,10 @@ except ModuleNotFoundError:
         summarize_playbook_status,
     )
 try:
+    from python.analysis.goals import build_goal_snapshot, recommend_autopilot_actions
+except ModuleNotFoundError:
+    from analysis.goals import build_goal_snapshot, recommend_autopilot_actions
+try:
     from python.analysis.security import (
         build_webhook_signature,
         mask_destination_target,
@@ -127,6 +131,7 @@ APP_WEBHOOK_SIGNING_SECRET = os.getenv("APP_WEBHOOK_SIGNING_SECRET", "").strip()
 APP_PARTNER_REFERRAL_URL = os.getenv("APP_PARTNER_REFERRAL_URL", "").strip()
 APP_COPILOT_MAX_RECOMMENDATIONS = int(os.getenv("APP_COPILOT_MAX_RECOMMENDATIONS", "6").strip() or 6)
 APP_FORECAST_PERIOD_DAYS = int(os.getenv("APP_FORECAST_PERIOD_DAYS", "90").strip() or 90)
+APP_AUTOPILOT_MAX_ACTIONS = int(os.getenv("APP_AUTOPILOT_MAX_ACTIONS", "8").strip() or 8)
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 
@@ -157,6 +162,8 @@ PAGE_FEATURE_REQUIREMENTS = {
     "Experiment Studio": "growth_experiments",
     "Playbook Automation": "playbook_automation",
     "ROI Forecast": "roi_forecasting",
+    "Goal Tracker": "goal_tracker",
+    "Autopilot Queue": "autopilot_queue",
 }
 
 CANONICAL_RAW_FILES = {
@@ -178,6 +185,8 @@ SECURITY_POLICY_STATE_KEY = "security_policy"
 PARTNER_PIPELINE_STATE_KEY = "partner_pipeline"
 EXPERIMENTS_STATE_KEY = "growth_experiments"
 PLAYBOOKS_STATE_KEY = "activation_playbooks"
+GOAL_TARGETS_STATE_KEY = "goal_targets"
+AUTOPILOT_QUEUE_STATE_KEY = "autopilot_queue_items"
 
 CORE_PAGES = [
     "No-Code Upload Center",
@@ -196,6 +205,8 @@ ADVANCED_PAGES = [
     "Experiment Studio",
     "Playbook Automation",
     "ROI Forecast",
+    "Goal Tracker",
+    "Autopilot Queue",
     "Attribution Deep Dive",
     "Scenario Optimizer",
     "White Label Studio",
@@ -250,6 +261,8 @@ def _get_usage_counters() -> dict[str, int]:
             "experiments_logged": 0,
             "playbooks_created": 0,
             "forecasts_generated": 0,
+            "goal_refreshes": 0,
+            "autopilot_actions_generated": 0,
         }
     return st.session_state[USAGE_COUNTERS_STATE_KEY]
 
@@ -341,6 +354,44 @@ def _get_activation_playbooks() -> list[dict[str, str | float | int]]:
 
 def _set_activation_playbooks(playbooks: list[dict[str, str | float | int]]) -> None:
     st.session_state[PLAYBOOKS_STATE_KEY] = playbooks
+def _default_goal_targets() -> dict[str, float]:
+    return {
+        "avg_cac": 80.0,
+        "avg_ltv_cac_ratio": 2.5,
+        "month1_retention": 0.35,
+        "active_error_alerts": 0.0,
+    }
+
+
+def _get_goal_targets() -> dict[str, float]:
+    if GOAL_TARGETS_STATE_KEY not in st.session_state:
+        st.session_state[GOAL_TARGETS_STATE_KEY] = _default_goal_targets()
+    raw = st.session_state[GOAL_TARGETS_STATE_KEY]
+    return {
+        "avg_cac": float(raw.get("avg_cac", 80.0)),
+        "avg_ltv_cac_ratio": float(raw.get("avg_ltv_cac_ratio", 2.5)),
+        "month1_retention": float(raw.get("month1_retention", 0.35)),
+        "active_error_alerts": float(raw.get("active_error_alerts", 0.0)),
+    }
+
+
+def _set_goal_targets(targets: dict[str, float]) -> None:
+    st.session_state[GOAL_TARGETS_STATE_KEY] = {
+        "avg_cac": float(targets.get("avg_cac", 80.0)),
+        "avg_ltv_cac_ratio": float(targets.get("avg_ltv_cac_ratio", 2.5)),
+        "month1_retention": float(targets.get("month1_retention", 0.35)),
+        "active_error_alerts": float(targets.get("active_error_alerts", 0.0)),
+    }
+
+
+def _get_autopilot_queue() -> list[dict[str, str | float]]:
+    if AUTOPILOT_QUEUE_STATE_KEY not in st.session_state:
+        st.session_state[AUTOPILOT_QUEUE_STATE_KEY] = []
+    return st.session_state[AUTOPILOT_QUEUE_STATE_KEY]
+
+
+def _set_autopilot_queue(queue: list[dict[str, str | float]]) -> None:
+    st.session_state[AUTOPILOT_QUEUE_STATE_KEY] = queue
 
 
 def _get_alert_destinations() -> list[dict[str, str]]:
@@ -2583,6 +2634,163 @@ def show_partner_hub(data: dict[str, pd.DataFrame] | None = None) -> None:
         mime="text/csv",
         use_container_width=True,
     )
+def show_goal_tracker(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Goal Tracker")
+    if not _has_entitlement("goal_tracker"):
+        _show_upgrade_cta(
+            feature="goal_tracker",
+            reason="Goal tracking is available on Growth and above.",
+        )
+        return
+
+    targets = _get_goal_targets()
+    g1, g2 = st.columns(2)
+    with g1:
+        target_avg_cac = st.number_input("Target Avg CAC (lower is better)", min_value=0.0, value=float(targets["avg_cac"]), step=1.0, key="goal_target_avg_cac")
+        target_ltv_cac = st.number_input("Target Avg LTV:CAC (higher is better)", min_value=0.0, value=float(targets["avg_ltv_cac_ratio"]), step=0.1, key="goal_target_ltv_cac")
+    with g2:
+        target_m1_ret = st.number_input("Target Month-1 Retention (0-1)", min_value=0.0, max_value=1.0, value=float(targets["month1_retention"]), step=0.01, key="goal_target_m1_ret")
+        target_errors = st.number_input("Target Active Error Alerts", min_value=0.0, value=float(targets["active_error_alerts"]), step=1.0, key="goal_target_errors")
+
+    if st.button("Save Goal Targets", use_container_width=True, key="goal_save_targets"):
+        _set_goal_targets(
+            {
+                "avg_cac": float(target_avg_cac),
+                "avg_ltv_cac_ratio": float(target_ltv_cac),
+                "month1_retention": float(target_m1_ret),
+                "active_error_alerts": float(target_errors),
+            }
+        )
+        _append_audit_event(
+            action="save_goal_targets",
+            outcome="success",
+            detail=f"cac={target_avg_cac:.2f}, ltv_cac={target_ltv_cac:.2f}, m1_ret={target_m1_ret:.2f}, errors={target_errors:.0f}",
+            category="goals",
+        )
+        st.success("Goal targets saved.")
+
+    current_targets = _get_goal_targets()
+    snapshot = build_goal_snapshot(
+        overview_df=data.get("overview", pd.DataFrame()),
+        retention_df=data.get("retention", pd.DataFrame()),
+        anomaly_df=data.get("anomaly", pd.DataFrame()),
+        targets=current_targets,
+    )
+    if st.button("Refresh Goal Snapshot", use_container_width=True, key="goal_refresh_snapshot"):
+        _increment_usage_counter("goal_refreshes")
+        _append_audit_event(
+            action="refresh_goal_snapshot",
+            outcome="success",
+            detail=f"rows={len(snapshot)}",
+            category="goals",
+        )
+        st.success("Goal snapshot refreshed.")
+
+    on_track = int((snapshot["status"] == "on_track").sum()) if not snapshot.empty else 0
+    at_risk = int((snapshot["status"] == "at_risk").sum()) if not snapshot.empty else 0
+    off_track = int((snapshot["status"] == "off_track").sum()) if not snapshot.empty else 0
+    m1, m2, m3 = st.columns(3)
+    m1.metric("On Track", on_track)
+    m2.metric("At Risk", at_risk)
+    m3.metric("Off Track", off_track)
+    st.dataframe(snapshot, use_container_width=True, hide_index=True)
+
+    if _has_entitlement("autopilot_queue"):
+        if st.button("Queue Off-Track Actions", use_container_width=True, key="goal_queue_actions"):
+            actions_df = recommend_autopilot_actions(snapshot, max_items=APP_AUTOPILOT_MAX_ACTIONS)
+            queue = _get_autopilot_queue()
+            active_limit = int(_current_plan().limits.get("active_autopilot_actions", 0))
+            slots = max(active_limit - len(queue), 0)
+            to_add = actions_df.to_dict("records")[:slots]
+            if not to_add:
+                st.warning(f"Autopilot queue limit reached ({active_limit}).")
+            else:
+                now = datetime.now(timezone.utc).isoformat()
+                for action in to_add:
+                    queue.append(
+                        {
+                            "metric": str(action.get("metric", "")),
+                            "priority": str(action.get("priority", "medium")),
+                            "action": str(action.get("action", "")),
+                            "owner": str(action.get("owner", "Growth Team")),
+                            "status": "open",
+                            "created_at": now,
+                        }
+                    )
+                _set_autopilot_queue(queue)
+                _increment_usage_counter("autopilot_actions_generated", len(to_add))
+                _append_audit_event(
+                    action="queue_autopilot_actions",
+                    outcome="success",
+                    detail=f"added={len(to_add)}, queue_size={len(queue)}",
+                    category="goals",
+                )
+                st.success(f"Queued {len(to_add)} autopilot action(s).")
+    else:
+        _show_upgrade_cta(
+            feature="autopilot_queue",
+            reason="Autopilot queue is available on Pro / Agency and above.",
+        )
+
+
+def show_autopilot_queue(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Autopilot Queue")
+    if not _has_entitlement("autopilot_queue"):
+        _show_upgrade_cta(
+            feature="autopilot_queue",
+            reason="Autopilot queue is available on Pro / Agency and above.",
+        )
+        return
+
+    queue = _get_autopilot_queue()
+    limit = int(_current_plan().limits.get("active_autopilot_actions", 0))
+    q1, q2 = st.columns(2)
+    q1.metric("Queued Actions", len(queue))
+    q2.metric("Queue Limit", limit)
+
+    if not queue:
+        st.info("No actions queued yet. Use Goal Tracker to queue off-track actions.")
+        return
+
+    queue_df = pd.DataFrame(queue)
+    st.dataframe(queue_df, use_container_width=True, hide_index=True)
+
+    selected_idx = st.selectbox(
+        "Queue Item",
+        options=list(range(len(queue))),
+        format_func=lambda idx: f"{queue[idx].get('metric', 'metric')} | {queue[idx].get('priority', 'medium')} | {queue[idx].get('status', 'open')}",
+        key="autopilot_update_idx",
+    )
+    new_status = st.selectbox(
+        "New Status",
+        options=["open", "in_progress", "completed", "dismissed"],
+        key="autopilot_update_status",
+    )
+    owner = st.text_input(
+        "Owner",
+        value=str(queue[int(selected_idx)].get("owner", "Growth Team")),
+        key="autopilot_update_owner",
+    )
+    if st.button("Save Queue Update", use_container_width=True, key="autopilot_save_update"):
+        queue[int(selected_idx)]["status"] = new_status
+        queue[int(selected_idx)]["owner"] = owner.strip() or "Growth Team"
+        queue[int(selected_idx)]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _set_autopilot_queue(queue)
+        _append_audit_event(
+            action="update_autopilot_action",
+            outcome="success",
+            detail=f"metric={queue[int(selected_idx)].get('metric', '')}, status={new_status}",
+            category="autopilot",
+        )
+        st.success("Autopilot action updated.")
+
+    st.download_button(
+        "Download Autopilot Queue (CSV)",
+        data=pd.DataFrame(queue).to_csv(index=False).encode("utf-8"),
+        file_name="autopilot_queue.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
@@ -2682,6 +2890,8 @@ def main() -> None:
         "Experiment Studio": show_experiment_studio,
         "Playbook Automation": show_playbook_automation,
         "ROI Forecast": show_roi_forecast,
+        "Goal Tracker": show_goal_tracker,
+        "Autopilot Queue": show_autopilot_queue,
         "Attribution Deep Dive": show_attribution_deep_dive,
         "Scenario Optimizer": show_scenario_optimizer,
         "White Label Studio": show_white_label_studio,

@@ -29,8 +29,10 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("growth", "security_center")
     assert has_feature("growth", "growth_experiments")
     assert has_feature("growth", "playbook_automation")
+    assert has_feature("growth", "goal_tracker")
     assert not has_feature("growth", "ai_growth_copilot")
     assert not has_feature("growth", "roi_forecasting")
+    assert not has_feature("growth", "autopilot_queue")
     assert not has_feature("growth", "attribution_depth")
     assert not has_feature("growth", "partner_hub")
     assert has_feature("pro", "slack_webhooks")
@@ -43,11 +45,14 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("pro", "growth_experiments")
     assert has_feature("pro", "playbook_automation")
     assert has_feature("pro", "roi_forecasting")
+    assert has_feature("pro", "goal_tracker")
+    assert has_feature("pro", "autopilot_queue")
     assert not has_feature("pro", "enterprise_controls")
     assert has_feature("enterprise", "enterprise_controls")
     assert has_feature("enterprise", "scim_provisioning")
     assert has_feature("enterprise", "ai_growth_copilot")
     assert has_feature("enterprise", "roi_forecasting")
+    assert has_feature("enterprise", "autopilot_queue")
 
 
 def test_next_plan_for_feature_returns_upgrade_target() -> None:
@@ -57,6 +62,9 @@ def test_next_plan_for_feature_returns_upgrade_target() -> None:
     upgrade_for_growth = next_plan_for_feature("growth", "roi_forecasting")
     assert upgrade_for_growth is not None
     assert upgrade_for_growth.slug == "pro"
+    upgrade_for_growth_autopilot = next_plan_for_feature("growth", "autopilot_queue")
+    assert upgrade_for_growth_autopilot is not None
+    assert upgrade_for_growth_autopilot.slug == "pro"
     upgrade_for_pro = next_plan_for_feature("pro", "enterprise_controls")
     assert upgrade_for_pro is not None
     assert upgrade_for_pro.slug == "enterprise"
