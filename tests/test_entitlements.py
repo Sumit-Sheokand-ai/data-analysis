@@ -11,12 +11,13 @@ from python.analysis.entitlements import (
 def test_plan_catalog_contains_expected_tiers() -> None:
     assert tuple(PLAN_CATALOG.keys()) == PLAN_ORDER
     assert get_plan("starter").display_name == "Starter"
-    assert get_plan("enterprise").display_name == "Enterprise"
+    assert get_plan("pro").display_name == "Pro / Agency"
 
 
 def test_normalize_plan_slug_defaults_for_unknown_values() -> None:
     assert normalize_plan_slug("growth") == "growth"
     assert normalize_plan_slug("GROWTH") == "growth"
+    assert normalize_plan_slug("enterprise") == "pro"
     assert normalize_plan_slug("unknown-tier") == "starter"
 
 
@@ -48,11 +49,6 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("pro", "goal_tracker")
     assert has_feature("pro", "autopilot_queue")
     assert not has_feature("pro", "enterprise_controls")
-    assert has_feature("enterprise", "enterprise_controls")
-    assert has_feature("enterprise", "scim_provisioning")
-    assert has_feature("enterprise", "ai_growth_copilot")
-    assert has_feature("enterprise", "roi_forecasting")
-    assert has_feature("enterprise", "autopilot_queue")
 
 
 def test_next_plan_for_feature_returns_upgrade_target() -> None:
@@ -66,5 +62,4 @@ def test_next_plan_for_feature_returns_upgrade_target() -> None:
     assert upgrade_for_growth_autopilot is not None
     assert upgrade_for_growth_autopilot.slug == "pro"
     upgrade_for_pro = next_plan_for_feature("pro", "enterprise_controls")
-    assert upgrade_for_pro is not None
-    assert upgrade_for_pro.slug == "enterprise"
+    assert upgrade_for_pro is None

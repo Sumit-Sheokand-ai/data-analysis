@@ -81,13 +81,13 @@ def test_policy_service_http_mode_roundtrip(tmp_path: Path) -> None:
         assert usage["pipeline_runs"] == 2
         assert has_feature_for_plan(
             plan_slug="enterprise",
-            feature="enterprise_controls",
+            feature="ai_growth_copilot",
             service_url=service_url,
             timeout_seconds=5,
         )
         assert not has_feature_for_plan(
             plan_slug="starter",
-            feature="enterprise_controls",
+            feature="ai_growth_copilot",
             service_url=service_url,
             timeout_seconds=5,
         )

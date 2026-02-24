@@ -131,6 +131,14 @@ try:
         required_feature_for_page,
     )
     from app.ui.layout import render_global_context_bar, render_page_scaffold
+    from app.ui.layout import (
+        build_readiness_summary,
+        render_compact_dataframe,
+        render_empty_state,
+        render_metric_strip,
+        render_readiness_panel,
+        render_section_header,
+    )
 except ModuleNotFoundError:
     from ui.navigation import (
         PAGE_GROUP_ORDER,
@@ -138,7 +146,16 @@ except ModuleNotFoundError:
         build_grouped_pages,
         required_feature_for_page,
     )
-    from ui.layout import render_global_context_bar, render_page_scaffold
+    from ui.layout import (
+        build_readiness_summary,
+        render_compact_dataframe,
+        render_empty_state,
+        render_global_context_bar,
+        render_metric_strip,
+        render_page_scaffold,
+        render_readiness_panel,
+        render_section_header,
+    )
 
 load_dotenv()
 
@@ -1652,8 +1669,9 @@ def _build_actionable_insights(data: dict[str, pd.DataFrame]) -> list[str]:
     return insights
 
 
-def show_actionable_insights(data: dict[str, pd.DataFrame]) -> None:
-    st.subheader("Actionable Insights")
+def show_actionable_insights(data: dict[str, pd.DataFrame], show_header: bool = True) -> None:
+    if show_header:
+        st.subheader("Actionable Insights")
     for item in _build_actionable_insights(data):
         st.markdown(f"- {item}")
 
@@ -1738,32 +1756,48 @@ def show_budget_planner(data: dict[str, pd.DataFrame]) -> None:
     st.dataframe(planner[view_cols], use_container_width=True)
 
 def show_overview(data: dict[str, pd.DataFrame]) -> None:
-    st.subheader("Executive Overview")
+    render_section_header(
+        "Executive Overview",
+        "Track top-line revenue, acquisition efficiency, and immediate risk signals.",
+    )
     overview = data["overview"]
     if overview.empty:
-        st.warning("No processed outputs found. Run pipeline first.")
+        render_empty_state(
+            "No processed outputs found.",
+            next_action="Run the pipeline from `No-Code Upload Center` to generate overview metrics.",
+            level="warning",
+        )
         return
 
     metrics = {row["metric"]: row["value"] for _, row in overview.iterrows()}
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Net Revenue", f"{metrics.get('total_net_revenue', 0):,.0f}")
-    c2.metric("Contribution Margin", f"{metrics.get('total_contribution_margin', 0):,.0f}")
-    c3.metric("Avg CAC", f"{metrics.get('avg_cac', 0):,.2f}")
-    c4.metric("Avg LTV:CAC", f"{metrics.get('avg_ltv_cac_ratio', 0):,.2f}")
+    render_metric_strip(
+        [
+            ("Net Revenue", f"{metrics.get('total_net_revenue', 0):,.0f}"),
+            ("Contribution Margin", f"{metrics.get('total_contribution_margin', 0):,.0f}"),
+            ("Avg CAC", f"{metrics.get('avg_cac', 0):,.2f}"),
+            ("Avg LTV:CAC", f"{metrics.get('avg_ltv_cac_ratio', 0):,.2f}"),
+        ]
+    )
 
     cac = data["cac"]
     if not cac.empty:
         fig = px.bar(cac, x="channel", y="cac", title="CAC by Channel")
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        render_empty_state("CAC by channel is not available yet.")
     _show_anomaly_summary(data)
-    show_actionable_insights(data)
+    with st.expander("More insights", expanded=False):
+        show_actionable_insights(data, show_header=False)
 
 
 def show_channel_performance(data: dict[str, pd.DataFrame]) -> None:
-    st.subheader("Channel Performance")
+    render_section_header(
+        "Channel Performance",
+        "Compare channels by efficiency and expected customer value.",
+    )
     p = data["profitability"]
     if p.empty:
-        st.info("No channel profitability output yet.")
+        render_empty_state("No channel profitability output yet.")
         return
 
     fig = px.scatter(
@@ -1776,7 +1810,11 @@ def show_channel_performance(data: dict[str, pd.DataFrame]) -> None:
         title="Channel LTV vs CAC",
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(p, use_container_width=True)
+    default_view = p.sort_values("ltv_cac_ratio", ascending=False) if "ltv_cac_ratio" in p.columns else p
+    render_compact_dataframe(default_view, max_rows=20, hide_index=True)
+    with st.expander("More options", expanded=False):
+        row_limit = st.slider("Rows", min_value=10, max_value=300, value=80, step=10, key="channel_perf_rows")
+        render_compact_dataframe(default_view, max_rows=row_limit, hide_index=True)
 
 
 def show_retention_ltv(data: dict[str, pd.DataFrame]) -> None:
@@ -3166,22 +3204,21 @@ def show_autopilot_queue(data: dict[str, pd.DataFrame] | None = None) -> None:
 
 
 def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
-    st.subheader("Anomaly Alerts")
-    _render_alert_destination_manager()
+    render_section_header(
+        "Anomaly Alerts",
+        "Focus on active warning/error signals first, then drill into detail when needed.",
+    )
     anomaly = _normalize_alert_state(_prepare_anomaly(data["anomaly"]))
     if anomaly.empty:
-        st.info("No anomaly report found.")
+        render_empty_state("No anomaly report found.")
         return
-    show_non_active = st.checkbox("Show acknowledged/snoozed alerts", value=False)
 
     severity_options = sorted(anomaly["severity"].dropna().unique().tolist()) if "severity" in anomaly.columns else []
     default_severity = [s for s in ["error", "warn", "info"] if s in severity_options] or severity_options
-    selected = st.multiselect("Severity", severity_options, default=default_severity) if severity_options else []
+    selected = st.multiselect("Severity", severity_options, default=default_severity, key="anomaly_primary_severity") if severity_options else []
     filtered = anomaly[anomaly["severity"].isin(selected)] if selected else anomaly
-    if not show_non_active and "_alert_state" in filtered.columns:
-        filtered = filtered[filtered["_alert_state"] == "active"]
 
-    query = st.text_input("Search", value="", placeholder="check/channel/metric/detail")
+    query = st.text_input("Search alerts", value="", placeholder="check/channel/metric/detail", key="anomaly_primary_query")
     if query:
         q = query.lower().strip()
         search_cols = [c for c in ["check", "channel", "metric", "detail"] if c in filtered.columns]
@@ -3190,22 +3227,45 @@ def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
             for c in search_cols:
                 mask = mask | filtered[c].astype(str).str.lower().str.contains(q, na=False)
             filtered = filtered[mask]
-    if _has_entitlement("alert_actions"):
-        _apply_alert_action(filtered)
-    else:
-        _show_upgrade_cta(
-            feature="alert_actions",
-            reason="Alert acknowledge/snooze workflows are available on Growth and above.",
-        )
 
+    show_non_active = False
+    row_limit = 60
+    with st.expander("More options", expanded=False):
+        show_non_active = st.checkbox(
+            "Include acknowledged/snoozed alerts",
+            value=False,
+            key="anomaly_include_non_active",
+        )
+        row_limit = st.slider(
+            "Rows",
+            min_value=10,
+            max_value=500,
+            value=60,
+            step=10,
+            key="anomaly_rows_limit",
+        )
+        _render_alert_destination_manager()
+
+    if not show_non_active and "_alert_state" in filtered.columns:
+        filtered = filtered[filtered["_alert_state"] == "active"]
     filtered = filtered.sort_values("_date_sort", ascending=False, na_position="last")
-    limit = st.slider("Rows", min_value=10, max_value=500, value=100, step=10)
     view_cols = [c for c in ["date", "channel", "check", "metric", "value", "threshold", "severity", "_alert_state", "detail"] if c in filtered.columns]
     display = filtered[view_cols].copy()
     if "severity" in display.columns:
         display["severity"] = display["severity"].map(_severity_badge)
     display = display.rename(columns={"_alert_state": "status"})
-    st.dataframe(display.head(limit), use_container_width=True)
+    render_compact_dataframe(display, max_rows=row_limit, hide_index=True)
+    if filtered.empty:
+        st.caption("No alerts match current filters.")
+        return
+    if _has_entitlement("alert_actions"):
+        with st.expander("Manage selected alert", expanded=False):
+            _apply_alert_action(filtered)
+    else:
+        _show_upgrade_cta(
+            feature="alert_actions",
+            reason="Alert acknowledge/snooze workflows are available on Growth and above.",
+        )
 
 
 def main() -> None:
@@ -3219,7 +3279,7 @@ def main() -> None:
     show_advanced_pages = st.sidebar.toggle(
         "Show advanced pages",
         value=False,
-        help="Enable diagnostics, security, enterprise, partner, and advanced analytics pages.",
+        help="Enable diagnostics, security, partner, and advanced analytics pages.",
     )
     grouped_page_options = _grouped_pages_for_current_plan(show_advanced_pages)
     section_options = [section for section in PAGE_GROUP_ORDER if grouped_page_options.get(section)]
@@ -3249,19 +3309,26 @@ def main() -> None:
         return
 
     can_access, access_message = _can_access_analytics_pages()
-    if not can_access:
-        st.warning(access_message)
-        st.info("Go to 'No-Code Upload Center' and upload CSV files (or a ZIP bundle), then run the pipeline.")
+    ready = False
+    readiness_message = ""
+    if can_access:
+        with st.spinner("Checking analytics data readiness..."):
+            ready, readiness_message = _ensure_processed_outputs()
+    readiness_status, readiness_summary, readiness_next_action = build_readiness_summary(
+        access_allowed=can_access,
+        access_message=access_message,
+        outputs_ready=ready,
+        outputs_message=readiness_message,
+    )
+    if readiness_status != "ready":
+        render_readiness_panel(
+            status=readiness_status,
+            message=readiness_summary,
+            next_action=readiness_next_action,
+        )
         return
-    if access_message:
-        st.caption(access_message)
-
-    with st.spinner("Checking analytics data readiness..."):
-        ready, message = _ensure_processed_outputs()
-    if not ready:
-        st.warning(message)
-        st.info("Use 'No-Code Upload Center' page to upload real data and run pipeline.")
-        return
+    if readiness_summary:
+        st.caption(readiness_summary)
 
     data = load_outputs()
     required_feature = required_feature_for_page(page)
@@ -3278,7 +3345,6 @@ def main() -> None:
         "Connectors & Sync": show_connectors_and_sync,
         "What Changed": show_what_changed,
         "Security Center": show_security_center,
-        "Enterprise Controls": show_enterprise_controls,
         "Partner Hub": show_partner_hub,
         "Growth Copilot": show_growth_copilot,
         "Experiment Studio": show_experiment_studio,

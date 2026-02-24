@@ -44,7 +44,6 @@ PAGE_REGISTRY: tuple[PageDefinition, ...] = (
     PageDefinition("Budget Planner", PAGE_GROUP_OPERATIONS, advanced=True, required_feature="scenario_planner"),
     PageDefinition("Scheduled Reports", PAGE_GROUP_OPERATIONS, advanced=True, required_feature="scheduled_reports"),
     PageDefinition("Security Center", PAGE_GROUP_ADMIN, advanced=True, required_feature="security_center"),
-    PageDefinition("Enterprise Controls", PAGE_GROUP_ADMIN, advanced=True, required_feature="enterprise_controls"),
     PageDefinition("Partner Hub", PAGE_GROUP_ADMIN, advanced=True, required_feature="partner_hub"),
     PageDefinition("White Label Studio", PAGE_GROUP_ADMIN, advanced=True, required_feature="white_label_controls"),
 )

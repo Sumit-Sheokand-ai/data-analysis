@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Literal
 
 
-PlanSlug = Literal["starter", "growth", "pro", "enterprise"]
+PlanSlug = Literal["starter", "growth", "pro"]
 
 
 @dataclass(frozen=True)
@@ -128,73 +128,19 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "active_autopilot_actions": 500,
         },
     ),
-    "enterprise": Plan(
-        slug="enterprise",
-        display_name="Enterprise",
-        monthly_price_usd=0,
-        annual_price_usd=0,
-        feature_flags=frozenset(
-            {
-                "core_dashboards",
-                "manual_uploads",
-                "strict_validation",
-                "advanced_analytics",
-                "scenario_planner",
-                "alert_actions",
-                "scheduled_reports",
-                "email_alerts",
-                "connector_health",
-                "connector_sync",
-                "what_changed_diagnostics",
-                "webhook_alerts",
-                "attribution_depth",
-                "scenario_optimizer",
-                "slack_webhooks",
-                "api_exports",
-                "multi_store",
-                "white_label",
-                "white_label_controls",
-                "security_center",
-                "audit_logs",
-                "partner_hub",
-                "enterprise_controls",
-                "rbac",
-                "ip_allowlist",
-                "scim_provisioning",
-                "ai_growth_copilot",
-                "growth_experiments",
-                "playbook_automation",
-                "roi_forecasting",
-                "goal_tracker",
-                "autopilot_queue",
-                "sso",
-                "custom_sla",
-            }
-        ),
-        limits={
-            "max_workspaces": 9999,
-            "max_stores": 9999,
-            "monthly_report_exports": 999999,
-            "alert_destinations": 9999,
-            "max_workspace_members": 9999,
-            "partner_pipeline_opportunities": 999999,
-            "active_experiments": 999999,
-            "monthly_ai_insights": 999999,
-            "active_playbooks": 999999,
-            "monthly_forecasts": 999999,
-            "active_goal_cards": 999999,
-            "active_autopilot_actions": 999999,
-        },
-    ),
 }
 
-PLAN_ORDER: tuple[PlanSlug, ...] = ("starter", "growth", "pro", "enterprise")
+PLAN_ORDER: tuple[PlanSlug, ...] = ("starter", "growth", "pro")
+LEGACY_PLAN_ALIASES: dict[str, PlanSlug] = {
+    "enterprise": "pro",
+}
 
 
 def normalize_plan_slug(value: str | None, default: PlanSlug = "starter") -> PlanSlug:
     if value is None:
         return default
     candidate = str(value).strip().lower()
+    candidate = LEGACY_PLAN_ALIASES.get(candidate, candidate)
     if candidate in PLAN_CATALOG:
         return candidate  # type: ignore[return-value]
     return default
