@@ -31,6 +31,22 @@ try:
     from python.connectors.ad_spend import map_ad_spend_export
 except ModuleNotFoundError:
     from connectors.ad_spend import map_ad_spend_export
+try:
+    from python.analysis.entitlements import (
+        get_plan,
+        has_feature,
+        list_plan_slugs,
+        next_plan_for_feature,
+        normalize_plan_slug,
+    )
+except ModuleNotFoundError:
+    from analysis.entitlements import (
+        get_plan,
+        has_feature,
+        list_plan_slugs,
+        next_plan_for_feature,
+        normalize_plan_slug,
+    )
 
 load_dotenv()
 
@@ -41,6 +57,12 @@ APP_DATA_SOURCE = os.getenv("DATA_SOURCE", "csv").strip().lower()
 APP_VALIDATION_MODE = os.getenv("VALIDATION_MODE", "warn").strip().lower()
 APP_AUTO_RUN_PIPELINE_ON_START = os.getenv("APP_AUTO_RUN_PIPELINE_ON_START", "1").strip().lower() in {"1", "true", "yes", "y"}
 APP_ALLOW_PROXY_SPEND = os.getenv("APP_ALLOW_PROXY_SPEND", "0").strip().lower() in {"1", "true", "yes", "y"}
+APP_DEFAULT_PLAN = normalize_plan_slug(os.getenv("APP_PLAN", "starter"))
+APP_ALLOW_PLAN_SWITCH = os.getenv("APP_ALLOW_PLAN_SWITCH", "1").strip().lower() in {"1", "true", "yes", "y"}
+APP_STRIPE_CHECKOUT_URL = os.getenv("APP_STRIPE_CHECKOUT_URL", "").strip()
+APP_STRIPE_PORTAL_URL = os.getenv("APP_STRIPE_PORTAL_URL", "").strip()
+APP_CONTACT_SALES_URL = os.getenv("APP_CONTACT_SALES_URL", "").strip()
+APP_TRIAL_END_DATE = os.getenv("APP_TRIAL_END_DATE", "").strip()
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 
 REQUIRED_OUTPUTS = [
@@ -52,6 +74,13 @@ REQUIRED_OUTPUTS = [
     "data_quality",
     "anomaly_report",
 ]
+PAGE_FEATURE_REQUIREMENTS = {
+    "Cohort Retention & LTV": "advanced_analytics",
+    "Customer Profitability": "advanced_analytics",
+    "Anomaly Alerts": "alert_actions",
+    "Budget Planner": "scenario_planner",
+    "Scheduled Reports": "scheduled_reports",
+}
 
 CANONICAL_RAW_FILES = {
     "sessions": "raw_sessions.csv",
@@ -61,17 +90,22 @@ CANONICAL_RAW_FILES = {
     "marketing_spend": "raw_marketing_spend.csv",
 }
 UPLOAD_SESSION_FLAG = "user_uploaded_data_this_session"
+ACTIVE_PLAN_STATE_KEY = "active_plan_slug"
+USAGE_COUNTERS_STATE_KEY = "usage_counters"
+
 CORE_PAGES = [
     "No-Code Upload Center",
     "Executive Overview",
     "Channel Performance",
     "Data Quality",
+    "Billing & Plan",
 ]
 ADVANCED_PAGES = [
     "Cohort Retention & LTV",
     "Customer Profitability",
     "Anomaly Alerts",
     "Budget Planner",
+    "Scheduled Reports",
 ]
 
 
@@ -85,6 +119,110 @@ def _clear_user_uploaded_data_flag() -> None:
 
 def _has_user_uploaded_data() -> bool:
     return bool(st.session_state.get(UPLOAD_SESSION_FLAG, False))
+
+
+def _get_active_plan_slug() -> str:
+    if ACTIVE_PLAN_STATE_KEY not in st.session_state:
+        st.session_state[ACTIVE_PLAN_STATE_KEY] = APP_DEFAULT_PLAN
+    return normalize_plan_slug(st.session_state[ACTIVE_PLAN_STATE_KEY])
+
+
+def _set_active_plan_slug(slug: str) -> None:
+    st.session_state[ACTIVE_PLAN_STATE_KEY] = normalize_plan_slug(slug)
+
+
+def _current_plan():
+    return get_plan(_get_active_plan_slug())
+
+
+def _has_entitlement(feature: str) -> bool:
+    return has_feature(_get_active_plan_slug(), feature)
+
+
+def _get_usage_counters() -> dict[str, int]:
+    if USAGE_COUNTERS_STATE_KEY not in st.session_state:
+        st.session_state[USAGE_COUNTERS_STATE_KEY] = {
+            "report_exports": 0,
+            "scheduled_reports_created": 0,
+            "pipeline_runs": 0,
+            "alerts_acknowledged": 0,
+        }
+    return st.session_state[USAGE_COUNTERS_STATE_KEY]
+
+
+def _increment_usage_counter(counter_name: str, amount: int = 1) -> None:
+    counters = _get_usage_counters()
+    counters[counter_name] = int(counters.get(counter_name, 0)) + int(amount)
+    st.session_state[USAGE_COUNTERS_STATE_KEY] = counters
+
+
+def _available_pages_for_current_plan(show_advanced_pages: bool) -> list[str]:
+    pages = list(CORE_PAGES)
+    if show_advanced_pages:
+        for page in ADVANCED_PAGES:
+            required_feature = PAGE_FEATURE_REQUIREMENTS.get(page)
+            if required_feature is None or _has_entitlement(required_feature):
+                pages.append(page)
+    return pages
+
+
+def _show_upgrade_cta(feature: str, reason: str) -> None:
+    st.warning(reason)
+    next_plan = next_plan_for_feature(_get_active_plan_slug(), feature)
+    if next_plan is not None:
+        st.info(
+            f"Upgrade to **{next_plan.display_name}** to unlock this feature "
+            f"(${next_plan.monthly_price_usd}/month)."
+        )
+    if APP_STRIPE_CHECKOUT_URL:
+        st.markdown(f"[Upgrade now]({APP_STRIPE_CHECKOUT_URL})")
+    if APP_STRIPE_PORTAL_URL:
+        st.markdown(f"[Manage billing]({APP_STRIPE_PORTAL_URL})")
+    if APP_CONTACT_SALES_URL:
+        st.markdown(f"[Contact sales]({APP_CONTACT_SALES_URL})")
+
+
+def _render_workspace_and_plan_sidebar() -> None:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Workspace & Plan")
+    workspace_name = st.sidebar.text_input(
+        "Workspace",
+        value=st.session_state.get("workspace_name", "Default Workspace"),
+        help="Name shown in exports and scheduled reports.",
+    )
+    st.session_state["workspace_name"] = workspace_name
+
+    current_slug = _get_active_plan_slug()
+    current_plan = _current_plan()
+    if APP_ALLOW_PLAN_SWITCH:
+        all_plan_slugs = list(list_plan_slugs())
+        selected_slug = st.sidebar.selectbox(
+            "Plan",
+            options=all_plan_slugs,
+            index=all_plan_slugs.index(current_slug),
+            format_func=lambda slug: (
+                f"{get_plan(slug).display_name} (${get_plan(slug).monthly_price_usd}/mo)"
+                if get_plan(slug).monthly_price_usd > 0
+                else f"{get_plan(slug).display_name} (Custom)"
+            ),
+        )
+        _set_active_plan_slug(selected_slug)
+        current_plan = _current_plan()
+    else:
+        st.sidebar.caption(f"Plan: **{current_plan.display_name}**")
+
+    if APP_TRIAL_END_DATE:
+        st.sidebar.caption(f"Trial ends: `{APP_TRIAL_END_DATE}`")
+
+    st.sidebar.caption(
+        f"Limits: stores {current_plan.limits['max_stores']} • "
+        f"workspaces {current_plan.limits['max_workspaces']} • "
+        f"exports/mo {current_plan.limits['monthly_report_exports']}"
+    )
+    if APP_STRIPE_CHECKOUT_URL:
+        st.sidebar.markdown(f"[Upgrade plan]({APP_STRIPE_CHECKOUT_URL})")
+    if APP_STRIPE_PORTAL_URL:
+        st.sidebar.markdown(f"[Billing portal]({APP_STRIPE_PORTAL_URL})")
 
 
 def _has_full_raw_contract() -> bool:
@@ -222,6 +360,7 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
         )
     except Exception as exc:
         return False, f"Pipeline run failed: {exc}"
+    _increment_usage_counter("pipeline_runs")
     return True, f"Pipeline completed in `{mode}` mode."
 
 
@@ -553,6 +692,7 @@ def _apply_alert_action(alert_df: pd.DataFrame) -> None:
         if st.button("Acknowledge", use_container_width=True):
             ack_ids.add(selected)
             snooze_map.pop(selected, None)
+            _increment_usage_counter("alerts_acknowledged")
     with c2:
         if st.button("Snooze", use_container_width=True):
             ack_ids.discard(selected)
@@ -829,6 +969,109 @@ def show_data_quality(data: dict[str, pd.DataFrame]) -> None:
         return
     st.dataframe(quality, use_container_width=True)
 
+
+def show_billing_and_plan(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Billing & Plan")
+    plan = _current_plan()
+    usage = _get_usage_counters()
+    export_limit = int(plan.limits.get("monthly_report_exports", 0))
+    exports_used = int(usage.get("report_exports", 0))
+    exports_left = max(export_limit - exports_used, 0)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current Plan", plan.display_name)
+    c2.metric("Monthly Price", "Custom" if plan.monthly_price_usd == 0 else f"${plan.monthly_price_usd}")
+    c3.metric("Report Exports Left", f"{exports_left}/{export_limit}")
+
+    limits_df = pd.DataFrame(
+        {
+            "limit": list(plan.limits.keys()),
+            "value": list(plan.limits.values()),
+        }
+    )
+    st.markdown("#### Plan Limits")
+    st.dataframe(limits_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Usage This Session")
+    usage_df = pd.DataFrame(
+        {
+            "metric": list(usage.keys()),
+            "value": list(usage.values()),
+        }
+    )
+    st.dataframe(usage_df, use_container_width=True, hide_index=True)
+
+    if APP_STRIPE_PORTAL_URL:
+        st.markdown(f"[Open Billing Portal]({APP_STRIPE_PORTAL_URL})")
+    if APP_STRIPE_CHECKOUT_URL:
+        st.markdown(f"[Upgrade Plan]({APP_STRIPE_CHECKOUT_URL})")
+    if APP_CONTACT_SALES_URL:
+        st.markdown(f"[Talk to Sales]({APP_CONTACT_SALES_URL})")
+
+
+def show_scheduled_reports(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Scheduled Reports")
+    if not _has_entitlement("scheduled_reports"):
+        _show_upgrade_cta(
+            feature="scheduled_reports",
+            reason="Scheduled reports are not available on your current plan.",
+        )
+        return
+
+    plan = _current_plan()
+    usage = _get_usage_counters()
+    export_limit = int(plan.limits.get("monthly_report_exports", 0))
+    exports_used = int(usage.get("report_exports", 0))
+    exports_left = max(export_limit - exports_used, 0)
+
+    st.caption("Set up recurring delivery of KPI snapshots for founders, finance, and growth teams.")
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Exports Used", exports_used)
+    r2.metric("Monthly Export Limit", export_limit)
+    r3.metric("Exports Left", exports_left)
+
+    destination = st.selectbox("Destination", options=["email", "slack_webhook", "csv_download"])
+    frequency = st.selectbox("Frequency", options=["daily", "weekly", "monthly"], index=1)
+    report_name = st.text_input("Report Name", value="Weekly Growth KPI Pack")
+    recipients = st.text_input("Recipients / Channel", value="growth@company.com")
+
+    if destination == "slack_webhook" and not _has_entitlement("slack_webhooks"):
+        _show_upgrade_cta(
+            feature="slack_webhooks",
+            reason="Slack webhook destinations are available on Pro and above.",
+        )
+        return
+
+    if st.button("Create Schedule", use_container_width=True):
+        _increment_usage_counter("scheduled_reports_created")
+        st.success(
+            f"Scheduled `{report_name}` ({frequency}) to `{recipients}` via `{destination}`. "
+            "Delivery workers can be wired in next."
+        )
+
+    if exports_left <= 0:
+        _show_upgrade_cta(
+            feature="scheduled_reports",
+            reason="You have reached your monthly export limit.",
+        )
+        return
+
+    overview = data.get("overview", pd.DataFrame())
+    if overview.empty:
+        st.info("Run the pipeline first to export a report snapshot.")
+        return
+
+    report_csv = overview.to_csv(index=False).encode("utf-8")
+    if st.download_button(
+        "Download KPI Snapshot (CSV)",
+        data=report_csv,
+        file_name="kpi_snapshot.csv",
+        mime="text/csv",
+        use_container_width=True,
+    ):
+        _increment_usage_counter("report_exports")
+
+
 def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Anomaly Alerts")
     anomaly = _normalize_alert_state(_prepare_anomaly(data["anomaly"]))
@@ -853,7 +1096,13 @@ def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
             for c in search_cols:
                 mask = mask | filtered[c].astype(str).str.lower().str.contains(q, na=False)
             filtered = filtered[mask]
-    _apply_alert_action(filtered)
+    if _has_entitlement("alert_actions"):
+        _apply_alert_action(filtered)
+    else:
+        _show_upgrade_cta(
+            feature="alert_actions",
+            reason="Alert acknowledge/snooze workflows are available on Growth and above.",
+        )
 
     filtered = filtered.sort_values("_date_sort", ascending=False, na_position="last")
     limit = st.slider("Rows", min_value=10, max_value=500, value=100, step=10)
@@ -869,12 +1118,13 @@ def main() -> None:
     st.set_page_config(page_title="D2C Profitability Analytics", layout="wide")
     st.title("D2C Marketing & Customer Profitability Analytics")
     st.caption("CAC, LTV, retention, and profitability insights")
+    _render_workspace_and_plan_sidebar()
     show_advanced_pages = st.sidebar.toggle(
         "Show advanced pages",
         value=False,
         help="Enable anomaly, cohort, customer, and budget-planner pages.",
     )
-    page_options = CORE_PAGES + ADVANCED_PAGES if show_advanced_pages else CORE_PAGES
+    page_options = _available_pages_for_current_plan(show_advanced_pages)
     page = st.sidebar.radio("Page", page_options)
     _render_no_code_sidebar_controls()
 
@@ -898,6 +1148,13 @@ def main() -> None:
         return
 
     data = load_outputs()
+    required_feature = PAGE_FEATURE_REQUIREMENTS.get(page)
+    if required_feature and not _has_entitlement(required_feature):
+        _show_upgrade_cta(
+            feature=required_feature,
+            reason=f"`{page}` is not available on your current plan.",
+        )
+        return
 
     page_renderer = {
         "Executive Overview": show_overview,
@@ -907,6 +1164,8 @@ def main() -> None:
         "Data Quality": show_data_quality,
         "Anomaly Alerts": show_anomaly_alerts,
         "Budget Planner": show_budget_planner,
+        "Billing & Plan": show_billing_and_plan,
+        "Scheduled Reports": show_scheduled_reports,
     }.get(page)
     if page_renderer is None:
         st.warning("Unknown page selected.")

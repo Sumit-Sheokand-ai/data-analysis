@@ -34,6 +34,20 @@ End-to-end analytics project for a D2C brand with:
    - `python -m python.pipeline.run_pipeline --data-source csv --validation-mode strict`
 4. Launch dashboard:
    - `streamlit run app/main.py`
+
+## Monetization-ready features (Phase 1)
+- Plan-aware entitlements in app (`Starter`, `Growth`, `Pro / Agency`, `Enterprise`)
+- Billing page with plan limits + usage counters
+- Feature gating for advanced pages and alert workflows
+- Scheduled report setup + export usage metering
+
+### Optional environment variables for billing UX
+- `APP_PLAN` (default: `starter`)
+- `APP_ALLOW_PLAN_SWITCH` (default: `1`; set `0` to lock plan server-side)
+- `APP_STRIPE_CHECKOUT_URL` (upgrade CTA link)
+- `APP_STRIPE_PORTAL_URL` (billing portal link)
+- `APP_CONTACT_SALES_URL` (enterprise/contact sales link)
+- `APP_TRIAL_END_DATE` (display trial expiry in sidebar)
 ## Real export connectors (Shopify + GA4)
 Map real platform exports into canonical raw tables:
 - `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`
