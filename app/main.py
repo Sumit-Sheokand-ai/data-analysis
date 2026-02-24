@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import shutil
+import inspect
 from pathlib import Path
 from io import BytesIO
 from datetime import datetime, timezone
@@ -157,6 +158,15 @@ def _safe_parse_json_object(raw_value: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         return {}
     return parsed
+
+
+def _call_with_supported_kwargs(func, **kwargs):
+    signature = inspect.signature(func)
+    parameters = signature.parameters
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return func(**kwargs)
+    supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+    return func(**supported_kwargs)
 
 
 RAW_DIR = Path(os.getenv("RAW_DATA_DIR", PROJECT_ROOT / "data" / "raw"))
@@ -428,7 +438,8 @@ def _get_service_backed_state(state_key: str, default_value):
             "APP_INSIGHTS_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
         )
     try:
-        value = get_state_value(
+        value = _call_with_supported_kwargs(
+            get_state_value,
             state_key=state_key,
             default_value=default_value,
             state_file=APP_INSIGHTS_STATE_FILE,
@@ -456,7 +467,8 @@ def _set_service_backed_state(state_key: str, value) -> None:
             "APP_INSIGHTS_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
         )
     try:
-        set_state_value(
+        _call_with_supported_kwargs(
+            set_state_value,
             state_key=state_key,
             value=value,
             state_file=APP_INSIGHTS_STATE_FILE,
@@ -505,15 +517,18 @@ def _current_plan():
 
 
 def _has_entitlement(feature: str) -> bool:
-    return has_feature_for_plan(
-        plan_slug=_get_active_plan_slug(),
-        feature=feature,
-        service_url=APP_POLICY_SERVICE_URL,
-        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
-        workspace_id=_current_workspace_id(),
-        user_id=_current_user_id(),
-        user_role=_current_user_role(),
-        service_token=APP_SERVICE_AUTH_TOKEN,
+    return bool(
+        _call_with_supported_kwargs(
+            has_feature_for_plan,
+            plan_slug=_get_active_plan_slug(),
+            feature=feature,
+            service_url=APP_POLICY_SERVICE_URL,
+            timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
+        )
     )
 
 
@@ -541,7 +556,8 @@ def _get_usage_counters() -> dict[str, int]:
         )
     default_counters = _default_usage_counters()
     try:
-        counters = get_policy_usage_counters(
+        counters = _call_with_supported_kwargs(
+            get_policy_usage_counters,
             default_counters=default_counters,
             state_file=APP_POLICY_STATE_FILE,
             service_url=APP_POLICY_SERVICE_URL,
@@ -568,7 +584,8 @@ def _set_usage_counters(counters: dict[str, int]) -> None:
     default_counters = _default_usage_counters()
     normalized = {key: int(counters.get(key, default_value)) for key, default_value in default_counters.items()}
     try:
-        set_policy_usage_counters(
+        _call_with_supported_kwargs(
+            set_policy_usage_counters,
             counters=normalized,
             state_file=APP_POLICY_STATE_FILE,
             service_url=APP_POLICY_SERVICE_URL,
@@ -1145,7 +1162,8 @@ def _ensure_processed_outputs() -> tuple[bool, str]:
     _backup_processed_outputs_before_run()
 
     try:
-        trigger_pipeline_job(
+        _call_with_supported_kwargs(
+            trigger_pipeline_job,
             data_source=APP_DATA_SOURCE,
             raw_data_dir=RAW_DIR,
             processed_data_dir=PROCESSED_DIR,
@@ -1178,7 +1196,8 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
         )
     _backup_processed_outputs_before_run()
     try:
-        trigger_pipeline_job(
+        _call_with_supported_kwargs(
+            trigger_pipeline_job,
             data_source=APP_DATA_SOURCE,
             raw_data_dir=RAW_DIR,
             processed_data_dir=PROCESSED_DIR,
