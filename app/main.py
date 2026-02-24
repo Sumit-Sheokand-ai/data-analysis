@@ -61,6 +61,18 @@ CANONICAL_RAW_FILES = {
     "marketing_spend": "raw_marketing_spend.csv",
 }
 UPLOAD_SESSION_FLAG = "user_uploaded_data_this_session"
+CORE_PAGES = [
+    "No-Code Upload Center",
+    "Executive Overview",
+    "Channel Performance",
+    "Data Quality",
+]
+ADVANCED_PAGES = [
+    "Cohort Retention & LTV",
+    "Customer Profitability",
+    "Anomaly Alerts",
+    "Budget Planner",
+]
 
 
 def _mark_user_uploaded_data() -> None:
@@ -73,6 +85,28 @@ def _clear_user_uploaded_data_flag() -> None:
 
 def _has_user_uploaded_data() -> bool:
     return bool(st.session_state.get(UPLOAD_SESSION_FLAG, False))
+
+
+def _has_full_raw_contract() -> bool:
+    return all((RAW_DIR / filename).exists() for filename in CANONICAL_RAW_FILES.values())
+
+
+def _is_real_data_ready() -> bool:
+    if not _has_full_raw_contract():
+        return False
+    if APP_ALLOW_PROXY_SPEND:
+        return True
+    return not _is_proxy_marketing_spend_present()
+
+
+def _can_access_analytics_pages() -> tuple[bool, str]:
+    if _has_user_uploaded_data():
+        return True, ""
+    if not _has_full_raw_contract():
+        return False, "This app is upload-first. Please upload your own data before opening analytics pages."
+    if not APP_ALLOW_PROXY_SPEND and _is_proxy_marketing_spend_present():
+        return False, "Proxy/dummy marketing spend data detected. Upload real spend data first."
+    return True, "Using previously uploaded real data already present on this app instance."
 
 
 def _load_csv(name: str) -> pd.DataFrame:
@@ -193,8 +227,7 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
 
 def _render_no_code_sidebar_controls() -> None:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Quick Actions")
-    st.sidebar.caption("Replace spend data or run pipeline instantly.")
+    st.sidebar.subheader("Data Status")
 
     proxy_detected = _is_proxy_marketing_spend_present()
     if not RAW_MARKETING_SPEND_PATH.exists():
@@ -203,40 +236,41 @@ def _render_no_code_sidebar_controls() -> None:
         st.sidebar.warning("Current spend file looks proxy/dummy.")
     else:
         st.sidebar.success("Current spend file looks real/non-proxy.")
+    with st.sidebar.expander("Quick Actions", expanded=False):
+        st.caption("Replace spend data or run pipeline instantly.")
+        uploaded_spend = st.file_uploader(
+            "Upload Real Ad Spend CSV",
+            type=["csv"],
+            key="real_ad_spend_upload",
+            help="Google/Meta/Bing export with spend/clicks/impressions columns.",
+        )
 
-    uploaded_spend = st.sidebar.file_uploader(
-        "Upload Real Ad Spend CSV",
-        type=["csv"],
-        key="real_ad_spend_upload",
-        help="Google/Meta/Bing export with spend/clicks/impressions columns.",
-    )
+        if st.button("Replace Spend Data", use_container_width=True):
+            ok, message = _replace_marketing_spend_from_uploaded_csv(uploaded_spend)
+            if ok:
+                st.success(message)
+            else:
+                st.error(message)
 
-    if st.sidebar.button("Replace Spend Data", use_container_width=True):
-        ok, message = _replace_marketing_spend_from_uploaded_csv(uploaded_spend)
-        if ok:
-            st.sidebar.success(message)
-        else:
-            st.sidebar.error(message)
+        if st.button("Remove Dummy/Proxy Spend", use_container_width=True):
+            if RAW_MARKETING_SPEND_PATH.exists() and _is_proxy_marketing_spend_present():
+                RAW_MARKETING_SPEND_PATH.unlink(missing_ok=True)
+                _clear_processed_outputs()
+                _clear_user_uploaded_data_flag()
+                st.success("Proxy/dummy spend data removed. Upload real spend CSV to continue.")
+            elif RAW_MARKETING_SPEND_PATH.exists():
+                st.info("Current spend data is not flagged as proxy.")
+            else:
+                st.info("No raw_marketing_spend.csv found.")
 
-    if st.sidebar.button("Remove Dummy/Proxy Spend", use_container_width=True):
-        if RAW_MARKETING_SPEND_PATH.exists() and _is_proxy_marketing_spend_present():
-            RAW_MARKETING_SPEND_PATH.unlink(missing_ok=True)
-            _clear_processed_outputs()
-            _clear_user_uploaded_data_flag()
-            st.sidebar.success("Proxy/dummy spend data removed. Upload real spend CSV to continue.")
-        elif RAW_MARKETING_SPEND_PATH.exists():
-            st.sidebar.info("Current spend data is not flagged as proxy.")
-        else:
-            st.sidebar.info("No raw_marketing_spend.csv found.")
-
-    chosen_validation = st.sidebar.selectbox("Run pipeline mode", options=["strict", "warn"], index=1)
-    if st.sidebar.button("Run Pipeline Now", use_container_width=True):
-        with st.spinner("Running analytics pipeline..."):
-            ok, message = _run_pipeline_now(chosen_validation)
-        if ok:
-            st.sidebar.success(message)
-        else:
-            st.sidebar.error(message)
+        chosen_validation = st.selectbox("Run pipeline mode", options=["strict", "warn"], index=1)
+        if st.button("Run Pipeline Now", use_container_width=True):
+            with st.spinner("Running analytics pipeline..."):
+                ok, message = _run_pipeline_now(chosen_validation)
+            if ok:
+                st.success(message)
+            else:
+                st.error(message)
 
 
 def _save_uploaded_csv(uploaded_file, target_path: Path) -> tuple[bool, str]:
@@ -343,7 +377,7 @@ def show_data_upload_center() -> None:
     m1.metric("Raw Files Ready", f"{ready_count}/{total_count}")
     m2.metric("Proxy Spend Detected", "Yes" if proxy_flag else "No")
     m3.metric("Processed Outputs", "Ready" if not _missing_outputs() else "Not Ready")
-    m4.metric("Uploaded This Session", "Yes" if _has_user_uploaded_data() else "No")
+    m4.metric("Real Data Ready", "Yes" if _is_real_data_ready() else "No")
     st.dataframe(status_df, use_container_width=True, hide_index=True)
 
     st.markdown("### Upload one document (ZIP bundle)")
@@ -449,6 +483,7 @@ def _prepare_anomaly(anomaly: pd.DataFrame) -> pd.DataFrame:
     else:
         out["_date_sort"] = pd.NaT
     return out
+
 def _severity_badge(severity: str) -> str:
     sev = str(severity).strip().lower()
     if sev == "error":
@@ -834,30 +869,26 @@ def main() -> None:
     st.set_page_config(page_title="D2C Profitability Analytics", layout="wide")
     st.title("D2C Marketing & Customer Profitability Analytics")
     st.caption("CAC, LTV, retention, and profitability insights")
-    _render_no_code_sidebar_controls()
-
-    page = st.sidebar.radio(
-        "Page",
-        [
-            "No-Code Upload Center",
-            "Executive Overview",
-            "Channel Performance",
-            "Cohort Retention & LTV",
-            "Customer Profitability",
-            "Data Quality",
-            "Anomaly Alerts",
-            "Budget Planner",
-        ],
+    show_advanced_pages = st.sidebar.toggle(
+        "Show advanced pages",
+        value=False,
+        help="Enable anomaly, cohort, customer, and budget-planner pages.",
     )
+    page_options = CORE_PAGES + ADVANCED_PAGES if show_advanced_pages else CORE_PAGES
+    page = st.sidebar.radio("Page", page_options)
+    _render_no_code_sidebar_controls()
 
     if page == "No-Code Upload Center":
         show_data_upload_center()
         return
 
-    if not _has_user_uploaded_data():
-        st.warning("This app is upload-first. Please upload your own data before opening analytics pages.")
+    can_access, access_message = _can_access_analytics_pages()
+    if not can_access:
+        st.warning(access_message)
         st.info("Go to 'No-Code Upload Center' and upload CSV files (or a ZIP bundle), then run the pipeline.")
         return
+    if access_message:
+        st.caption(access_message)
 
     with st.spinner("Checking analytics data readiness..."):
         ready, message = _ensure_processed_outputs()
@@ -868,20 +899,19 @@ def main() -> None:
 
     data = load_outputs()
 
-    if page == "Executive Overview":
-        show_overview(data)
-    elif page == "Channel Performance":
-        show_channel_performance(data)
-    elif page == "Cohort Retention & LTV":
-        show_retention_ltv(data)
-    elif page == "Customer Profitability":
-        show_customer_profitability(data)
-    elif page == "Data Quality":
-        show_data_quality(data)
-    elif page == "Budget Planner":
-        show_budget_planner(data)
-    else:
-        show_anomaly_alerts(data)
+    page_renderer = {
+        "Executive Overview": show_overview,
+        "Channel Performance": show_channel_performance,
+        "Cohort Retention & LTV": show_retention_ltv,
+        "Customer Profitability": show_customer_profitability,
+        "Data Quality": show_data_quality,
+        "Anomaly Alerts": show_anomaly_alerts,
+        "Budget Planner": show_budget_planner,
+    }.get(page)
+    if page_renderer is None:
+        st.warning("Unknown page selected.")
+        return
+    page_renderer(data)
 
 
 if __name__ == "__main__":
