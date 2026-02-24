@@ -20,6 +20,13 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Prepare canonical raw data (CI fixture)
+        run: |
+          python -m python.pipeline.map_maven_fuzzy_factory \
+            --input-dir data/raw/external/maven_fuzzy_factory \
+            --output-dir data/raw \
+            --allow-proxy-marketing-spend \
+            --validation-mode warn
 
       - name: Run pipeline (CSV fallback)
         env:
