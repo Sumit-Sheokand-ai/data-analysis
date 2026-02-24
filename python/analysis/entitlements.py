@@ -55,6 +55,7 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "connector_health",
                 "connector_sync",
                 "what_changed_diagnostics",
+                "security_center",
             }
         ),
         limits={
@@ -62,6 +63,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "max_stores": 3,
             "monthly_report_exports": 20,
             "alert_destinations": 3,
+            "max_workspace_members": 5,
+            "partner_pipeline_opportunities": 0,
         },
     ),
     "pro": Plan(
@@ -83,10 +86,16 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "connector_sync",
                 "what_changed_diagnostics",
                 "webhook_alerts",
+                "attribution_depth",
+                "scenario_optimizer",
                 "slack_webhooks",
                 "api_exports",
                 "multi_store",
                 "white_label",
+                "white_label_controls",
+                "security_center",
+                "audit_logs",
+                "partner_hub",
             }
         ),
         limits={
@@ -94,6 +103,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "max_stores": 20,
             "monthly_report_exports": 200,
             "alert_destinations": 20,
+            "max_workspace_members": 25,
+            "partner_pipeline_opportunities": 200,
         },
     ),
     "enterprise": Plan(
@@ -115,10 +126,20 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "connector_sync",
                 "what_changed_diagnostics",
                 "webhook_alerts",
+                "attribution_depth",
+                "scenario_optimizer",
                 "slack_webhooks",
                 "api_exports",
                 "multi_store",
                 "white_label",
+                "white_label_controls",
+                "security_center",
+                "audit_logs",
+                "partner_hub",
+                "enterprise_controls",
+                "rbac",
+                "ip_allowlist",
+                "scim_provisioning",
                 "sso",
                 "custom_sla",
             }
@@ -128,6 +149,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "max_stores": 9999,
             "monthly_report_exports": 999999,
             "alert_destinations": 9999,
+            "max_workspace_members": 9999,
+            "partner_pipeline_opportunities": 999999,
         },
     ),
 }

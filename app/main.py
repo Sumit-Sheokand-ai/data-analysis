@@ -64,6 +64,28 @@ except ModuleNotFoundError:
         build_overview_deltas,
         load_snapshot_csv,
     )
+try:
+    from python.analysis.kpis import attribute_customers_last_non_direct, prep_orders_with_margin
+except ModuleNotFoundError:
+    from analysis.kpis import attribute_customers_last_non_direct, prep_orders_with_margin
+try:
+    from python.analysis.optimizer import optimize_budget_allocation
+except ModuleNotFoundError:
+    from analysis.optimizer import optimize_budget_allocation
+try:
+    from python.analysis.security import (
+        build_webhook_signature,
+        mask_destination_target,
+        parse_webhook_allowed_hosts,
+        validate_webhook_target_url,
+    )
+except ModuleNotFoundError:
+    from analysis.security import (
+        build_webhook_signature,
+        mask_destination_target,
+        parse_webhook_allowed_hosts,
+        validate_webhook_target_url,
+    )
 
 load_dotenv()
 
@@ -83,6 +105,10 @@ APP_TRIAL_END_DATE = os.getenv("APP_TRIAL_END_DATE", "").strip()
 APP_SYNC_DEFAULT_FREQUENCY = os.getenv("APP_SYNC_DEFAULT_FREQUENCY", "daily").strip().lower()
 APP_SYNC_DEFAULT_HOUR_UTC = int(os.getenv("APP_SYNC_DEFAULT_HOUR_UTC", "2").strip() or 2)
 APP_WEBHOOK_TIMEOUT_SECONDS = int(os.getenv("APP_WEBHOOK_TIMEOUT_SECONDS", "10").strip() or 10)
+APP_WEBHOOK_ALLOWED_HOSTS = parse_webhook_allowed_hosts(os.getenv("APP_WEBHOOK_ALLOWED_HOSTS", ""))
+APP_ENFORCE_HTTPS_WEBHOOKS = os.getenv("APP_ENFORCE_HTTPS_WEBHOOKS", "1").strip().lower() in {"1", "true", "yes", "y"}
+APP_WEBHOOK_SIGNING_SECRET = os.getenv("APP_WEBHOOK_SIGNING_SECRET", "").strip()
+APP_PARTNER_REFERRAL_URL = os.getenv("APP_PARTNER_REFERRAL_URL", "").strip()
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 
@@ -103,6 +129,12 @@ PAGE_FEATURE_REQUIREMENTS = {
     "Scheduled Reports": "scheduled_reports",
     "Connectors & Sync": "connector_health",
     "What Changed": "what_changed_diagnostics",
+    "Attribution Deep Dive": "attribution_depth",
+    "Scenario Optimizer": "scenario_optimizer",
+    "White Label Studio": "white_label_controls",
+    "Security Center": "security_center",
+    "Enterprise Controls": "enterprise_controls",
+    "Partner Hub": "partner_hub",
 }
 
 CANONICAL_RAW_FILES = {
@@ -117,6 +149,11 @@ ACTIVE_PLAN_STATE_KEY = "active_plan_slug"
 USAGE_COUNTERS_STATE_KEY = "usage_counters"
 ALERT_DESTINATIONS_STATE_KEY = "alert_destinations"
 SYNC_JOBS_STATE_KEY = "sync_jobs"
+BRANDING_STATE_KEY = "branding_config"
+AUDIT_LOG_STATE_KEY = "audit_log_events"
+TEAM_MEMBERS_STATE_KEY = "team_members"
+SECURITY_POLICY_STATE_KEY = "security_policy"
+PARTNER_PIPELINE_STATE_KEY = "partner_pipeline"
 
 CORE_PAGES = [
     "No-Code Upload Center",
@@ -128,6 +165,12 @@ CORE_PAGES = [
 ADVANCED_PAGES = [
     "Connectors & Sync",
     "What Changed",
+    "Security Center",
+    "Enterprise Controls",
+    "Partner Hub",
+    "Attribution Deep Dive",
+    "Scenario Optimizer",
+    "White Label Studio",
     "Cohort Retention & LTV",
     "Customer Profitability",
     "Anomaly Alerts",
@@ -184,6 +227,72 @@ def _increment_usage_counter(counter_name: str, amount: int = 1) -> None:
     counters[counter_name] = int(counters.get(counter_name, 0)) + int(amount)
     st.session_state[USAGE_COUNTERS_STATE_KEY] = counters
 
+def _get_audit_events() -> list[dict[str, str]]:
+    if AUDIT_LOG_STATE_KEY not in st.session_state:
+        st.session_state[AUDIT_LOG_STATE_KEY] = []
+    return st.session_state[AUDIT_LOG_STATE_KEY]
+
+
+def _append_audit_event(action: str, outcome: str, detail: str, category: str = "app") -> None:
+    events = _get_audit_events()
+    events.append(
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "category": str(category).strip().lower() or "app",
+            "action": str(action).strip(),
+            "outcome": str(outcome).strip().lower() or "success",
+            "workspace": str(st.session_state.get("workspace_name", "Default Workspace")).strip(),
+            "detail": str(detail).strip(),
+        }
+    )
+    st.session_state[AUDIT_LOG_STATE_KEY] = events[-1000:]
+
+
+def _get_security_policy() -> dict[str, object]:
+    if SECURITY_POLICY_STATE_KEY not in st.session_state:
+        st.session_state[SECURITY_POLICY_STATE_KEY] = {
+            "sso_domain": "",
+            "require_sso": False,
+            "ip_allowlist": [],
+        }
+    return st.session_state[SECURITY_POLICY_STATE_KEY]
+
+
+def _set_security_policy(policy: dict[str, object]) -> None:
+    st.session_state[SECURITY_POLICY_STATE_KEY] = {
+        "sso_domain": str(policy.get("sso_domain", "")).strip().lower(),
+        "require_sso": bool(policy.get("require_sso", False)),
+        "ip_allowlist": [str(value).strip() for value in policy.get("ip_allowlist", []) if str(value).strip()],
+    }
+
+
+def _get_team_members() -> list[dict[str, str]]:
+    if TEAM_MEMBERS_STATE_KEY not in st.session_state:
+        st.session_state[TEAM_MEMBERS_STATE_KEY] = [
+            {
+                "name": "Workspace Owner",
+                "email": "owner@company.com",
+                "role": "owner",
+                "status": "active",
+                "added_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    return st.session_state[TEAM_MEMBERS_STATE_KEY]
+
+
+def _set_team_members(members: list[dict[str, str]]) -> None:
+    st.session_state[TEAM_MEMBERS_STATE_KEY] = members
+
+
+def _get_partner_pipeline() -> list[dict[str, str | float]]:
+    if PARTNER_PIPELINE_STATE_KEY not in st.session_state:
+        st.session_state[PARTNER_PIPELINE_STATE_KEY] = []
+    return st.session_state[PARTNER_PIPELINE_STATE_KEY]
+
+
+def _set_partner_pipeline(pipeline: list[dict[str, str | float]]) -> None:
+    st.session_state[PARTNER_PIPELINE_STATE_KEY] = pipeline
+
 
 def _get_alert_destinations() -> list[dict[str, str]]:
     if ALERT_DESTINATIONS_STATE_KEY not in st.session_state:
@@ -193,32 +302,57 @@ def _get_alert_destinations() -> list[dict[str, str]]:
 
 def _add_alert_destination(destination_type: str, target: str, label: str) -> None:
     destinations = _get_alert_destinations()
+    normalized_type = destination_type.strip().lower()
+    normalized_target = target.strip()
+    normalized_label = label.strip() or destination_type.strip().title()
     destinations.append(
         {
-            "type": destination_type.strip().lower(),
-            "target": target.strip(),
-            "label": label.strip() or destination_type.strip().title(),
+            "type": normalized_type,
+            "target": normalized_target,
+            "label": normalized_label,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
     st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+    _append_audit_event(
+        action="add_alert_destination",
+        outcome="success",
+        detail=f"type={normalized_type}, label={normalized_label}, target={mask_destination_target(normalized_type, normalized_target)}",
+        category="alerts",
+    )
 
 
 def _remove_alert_destination(index: int) -> None:
     destinations = _get_alert_destinations()
     if 0 <= index < len(destinations):
-        destinations.pop(index)
+        removed = destinations.pop(index)
         st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+        _append_audit_event(
+            action="remove_alert_destination",
+            outcome="success",
+            detail=f"label={removed.get('label', '')}, type={removed.get('type', '')}",
+            category="alerts",
+        )
 
 
 def _send_test_webhook(url: str, payload: dict) -> tuple[bool, str]:
+    allowed, reason = validate_webhook_target_url(
+        target=url,
+        allowed_hosts=APP_WEBHOOK_ALLOWED_HOSTS,
+        enforce_https=APP_ENFORCE_HTTPS_WEBHOOKS,
+    )
+    if not allowed:
+        return False, reason
     try:
         body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if APP_WEBHOOK_SIGNING_SECRET:
+            headers["X-D2C-Signature"] = build_webhook_signature(body, APP_WEBHOOK_SIGNING_SECRET)
         req = urllib_request.Request(
             url=url,
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         with urllib_request.urlopen(req, timeout=APP_WEBHOOK_TIMEOUT_SECONDS) as resp:  # nosec B310
             code = int(getattr(resp, "status", 200))
@@ -261,6 +395,12 @@ def _dispatch_sample_alert_to_destinations() -> tuple[int, int, list[str]]:
         else:
             fail += 1
             messages.append(f"{d_label}: unsupported destination type `{d_type}`.")
+    _append_audit_event(
+        action="dispatch_test_alert",
+        outcome="success" if fail == 0 else ("partial" if success > 0 else "failed"),
+        detail=f"destinations={len(destinations)}, success={success}, failed={fail}",
+        category="alerts",
+    )
     return success, fail, messages
 
 
@@ -399,6 +539,58 @@ def _render_workspace_and_plan_sidebar() -> None:
         st.sidebar.markdown(f"[Billing portal]({APP_STRIPE_PORTAL_URL})")
 
 
+def _get_branding_config() -> dict[str, str]:
+    if BRANDING_STATE_KEY not in st.session_state:
+        st.session_state[BRANDING_STATE_KEY] = {
+            "brand_name": "D2C Marketing & Customer Profitability Analytics",
+            "subtitle": "CAC, LTV, retention, and profitability insights",
+            "primary_color": "#2f6df6",
+            "logo_url": "",
+        }
+    return st.session_state[BRANDING_STATE_KEY]
+
+
+def _set_branding_config(config: dict[str, str]) -> None:
+    st.session_state[BRANDING_STATE_KEY] = {
+        "brand_name": str(config.get("brand_name", "")).strip(),
+        "subtitle": str(config.get("subtitle", "")).strip(),
+        "primary_color": str(config.get("primary_color", "#2f6df6")).strip(),
+        "logo_url": str(config.get("logo_url", "")).strip(),
+    }
+
+
+def _apply_branding_styles() -> None:
+    config = _get_branding_config()
+    color = config.get("primary_color", "#2f6df6").strip() or "#2f6df6"
+    st.markdown(
+        f"""
+        <style>
+        .stApp a {{ color: {color}; }}
+        .stMetric > label {{ color: {color}; font-weight: 600; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_brand_header() -> None:
+    config = _get_branding_config()
+    brand_name = config.get("brand_name", "").strip() or "D2C Marketing & Customer Profitability Analytics"
+    subtitle = config.get("subtitle", "").strip() or "CAC, LTV, retention, and profitability insights"
+    logo_url = config.get("logo_url", "").strip()
+    if logo_url:
+        st.image(logo_url, width=72)
+    st.title(brand_name)
+    st.caption(subtitle)
+
+
+def _safe_load_raw_frames() -> dict[str, pd.DataFrame] | None:
+    try:
+        return load_from_csv(RAW_DIR)
+    except Exception:
+        return None
+
+
 def _has_full_raw_contract() -> bool:
     return all((RAW_DIR / filename).exists() for filename in CANONICAL_RAW_FILES.values())
 
@@ -470,12 +662,24 @@ def _replace_marketing_spend_from_uploaded_csv(uploaded_file) -> tuple[bool, str
             output_marketing_spend_csv=RAW_MARKETING_SPEND_PATH,
         )
     except Exception as exc:
+        _append_audit_event(
+            action="replace_marketing_spend",
+            outcome="failed",
+            detail=f"error={exc}",
+            category="data",
+        )
         return False, f"Could not map uploaded spend file: {exc}"
     finally:
         temp_input.unlink(missing_ok=True)
 
     _clear_processed_outputs()
     _mark_user_uploaded_data()
+    _append_audit_event(
+        action="replace_marketing_spend",
+        outcome="success",
+        detail=f"rows={len(mapped):,}",
+        category="data",
+    )
     return True, f"Replaced marketing spend with {len(mapped):,} validated rows from your upload."
 
 
@@ -535,9 +739,21 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
             validation_mode=mode,
         )
     except Exception as exc:
+        _append_audit_event(
+            action="run_pipeline",
+            outcome="failed",
+            detail=f"mode={mode}, error={exc}",
+            category="pipeline",
+        )
         return False, f"Pipeline run failed: {exc}"
     _increment_usage_counter("pipeline_runs")
     _increment_usage_counter("connector_sync_runs")
+    _append_audit_event(
+        action="run_pipeline",
+        outcome="success",
+        detail=f"mode={mode}, source={APP_DATA_SOURCE}",
+        category="pipeline",
+    )
     return True, f"Pipeline completed in `{mode}` mode."
 
 
@@ -1264,7 +1480,15 @@ def _render_alert_destination_manager() -> None:
     st.caption(f"Configured destinations: {len(destinations)}/{max_destinations}")
 
     if destinations:
-        destination_df = pd.DataFrame(destinations)
+        destination_df = pd.DataFrame(destinations).copy()
+        if "target" in destination_df.columns:
+            destination_df["target"] = destination_df.apply(
+                lambda row: mask_destination_target(
+                    str(row.get("type", "")),
+                    str(row.get("target", "")),
+                ),
+                axis=1,
+            )
         st.dataframe(destination_df, use_container_width=True, hide_index=True)
 
     options = []
@@ -1289,8 +1513,17 @@ def _render_alert_destination_manager() -> None:
                 )
             elif not destination_target.strip():
                 st.error("Target is required.")
-            elif destination_type == "webhook" and not destination_target.strip().lower().startswith(("http://", "https://")):
-                st.error("Webhook target must start with http:// or https://")
+            elif destination_type == "webhook":
+                is_allowed, validation_message = validate_webhook_target_url(
+                    target=destination_target,
+                    allowed_hosts=APP_WEBHOOK_ALLOWED_HOSTS,
+                    enforce_https=APP_ENFORCE_HTTPS_WEBHOOKS,
+                )
+                if not is_allowed:
+                    st.error(validation_message)
+                else:
+                    _add_alert_destination(destination_type, destination_target, destination_label)
+                    st.success("Destination added.")
             else:
                 _add_alert_destination(destination_type, destination_target, destination_label)
                 st.success("Destination added.")
@@ -1367,13 +1600,31 @@ def show_connectors_and_sync(data: dict[str, pd.DataFrame] | None = None) -> Non
                 "status": str(sync_status),
             }
         ]
+        _append_audit_event(
+            action="save_sync_job",
+            outcome="success",
+            detail=f"frequency={sync_frequency}, hour_utc={int(sync_hour)}, status={sync_status}",
+            category="pipeline",
+        )
         st.success("Sync job saved.")
     if st.button("Run Sync Now", use_container_width=True):
         with st.spinner("Running connector sync..."):
             ok, message = _run_pipeline_now("warn")
         if ok:
+            _append_audit_event(
+                action="run_sync_now",
+                outcome="success",
+                detail="manual connector sync completed",
+                category="pipeline",
+            )
             st.success(message)
         else:
+            _append_audit_event(
+                action="run_sync_now",
+                outcome="failed",
+                detail=message,
+                category="pipeline",
+            )
             st.error(message)
 
 
@@ -1421,6 +1672,500 @@ def show_what_changed(data: dict[str, pd.DataFrame]) -> None:
         st.dataframe(ratio_deltas, use_container_width=True, hide_index=True)
 
 
+def show_attribution_deep_dive(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Attribution Deep Dive")
+    if not _has_entitlement("attribution_depth"):
+        _show_upgrade_cta(
+            feature="attribution_depth",
+            reason="Attribution deep-dive diagnostics are available on Pro and above.",
+        )
+        return
+
+    frames = _safe_load_raw_frames()
+    if frames is None:
+        st.info("Could not load raw contract files for attribution deep dive.")
+        return
+
+    orders_with_margin = prep_orders_with_margin(frames["orders"], frames["refunds"])
+    attributions = attribute_customers_last_non_direct(frames["customers"], orders_with_margin, frames["sessions"])
+    if attributions.empty:
+        st.info("No attribution data available yet.")
+        return
+
+    channel_dist = (
+        attributions.groupby("attributed_channel", as_index=False)["customer_id"]
+        .nunique()
+        .rename(columns={"attributed_channel": "channel", "customer_id": "first_order_customers"})
+        .sort_values("first_order_customers", ascending=False)
+        .reset_index(drop=True)
+    )
+    total_customers = max(int(channel_dist["first_order_customers"].sum()), 1)
+    channel_dist["share_pct"] = (channel_dist["first_order_customers"] / total_customers) * 100.0
+    c1, c2 = st.columns(2)
+    c1.metric("Attributed Customers", f"{total_customers:,}")
+    c2.metric("Top Channel Share", f"{channel_dist.iloc[0]['share_pct']:.1f}%")
+    st.dataframe(channel_dist, use_container_width=True, hide_index=True)
+    fig_dist = px.bar(channel_dist, x="channel", y="first_order_customers", title="First-Order Attribution by Channel")
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    sessions = frames["sessions"].copy()
+    sessions["session_ts"] = pd.to_datetime(sessions["session_ts"], errors="coerce")
+    first_orders = attributions[["customer_id", "first_order_ts", "attributed_channel"]].copy()
+    first_orders["first_order_ts"] = pd.to_datetime(first_orders["first_order_ts"], errors="coerce")
+    eligible = sessions.merge(first_orders[["customer_id", "first_order_ts"]], on="customer_id", how="inner")
+    eligible = eligible[eligible["session_ts"] <= eligible["first_order_ts"]].copy()
+    if not eligible.empty:
+        path_stats = (
+            eligible.groupby("customer_id", as_index=False)
+            .agg(
+                total_touches=("session_id", "nunique"),
+                unique_channels=("channel", "nunique"),
+                non_direct_touches=("is_direct", lambda s: int((~s.astype(bool)).sum())),
+            )
+            .sort_values("total_touches", ascending=False)
+        )
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Median Touches", f"{path_stats['total_touches'].median():.1f}")
+        p2.metric("Median Unique Channels", f"{path_stats['unique_channels'].median():.1f}")
+        p3.metric("Multi-touch Customers", f"{int((path_stats['total_touches'] > 1).sum()):,}")
+        touch_bins = (
+            path_stats.groupby("total_touches", as_index=False)["customer_id"]
+            .nunique()
+            .rename(columns={"customer_id": "customers"})
+            .sort_values("total_touches")
+        )
+        fig_touches = px.bar(touch_bins, x="total_touches", y="customers", title="Touch Depth Distribution")
+        st.plotly_chart(fig_touches, use_container_width=True)
+
+        first_touch = (
+            eligible.sort_values(["customer_id", "session_ts"])
+            .groupby("customer_id", as_index=False)
+            .first()[["customer_id", "channel"]]
+            .rename(columns={"channel": "first_touch_channel"})
+        )
+        compare = attributions[["customer_id", "attributed_channel"]].merge(first_touch, on="customer_id", how="left")
+        compare["same_channel"] = compare["attributed_channel"] == compare["first_touch_channel"]
+        match_rate = float(compare["same_channel"].mean()) * 100.0 if not compare.empty else 0.0
+        st.caption(f"First-touch vs last-non-direct match rate: **{match_rate:.1f}%**")
+        compare_dist = (
+            compare.groupby(["first_touch_channel", "attributed_channel"], as_index=False)["customer_id"]
+            .nunique()
+            .rename(columns={"customer_id": "customers"})
+        )
+        if not compare_dist.empty:
+            fig_compare = px.density_heatmap(
+                compare_dist,
+                x="first_touch_channel",
+                y="attributed_channel",
+                z="customers",
+                color_continuous_scale="Blues",
+                title="First-Touch vs Last-Non-Direct Attribution Crosswalk",
+            )
+            st.plotly_chart(fig_compare, use_container_width=True)
+
+
+def show_scenario_optimizer(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Scenario Optimizer")
+    if not _has_entitlement("scenario_optimizer"):
+        _show_upgrade_cta(
+            feature="scenario_optimizer",
+            reason="Constrained scenario optimization is available on Pro and above.",
+        )
+        return
+
+    cac = data.get("cac", pd.DataFrame()).copy()
+    profitability = data.get("profitability", pd.DataFrame()).copy()
+    if cac.empty or profitability.empty:
+        st.info("Need `cac_by_channel` and `channel_profitability` outputs before optimization.")
+        return
+
+    default_budget = float(pd.to_numeric(cac.get("total_cost"), errors="coerce").fillna(0).sum())
+    if default_budget <= 0:
+        default_budget = 25000.0
+
+    total_budget = st.number_input("Total Budget", min_value=0.0, value=round(default_budget, 2), step=100.0)
+    target_max_cac = st.number_input("Target Max Blended CAC", min_value=0.0, value=80.0, step=1.0)
+    reserve_pct = st.slider("Cash Reserve (%)", min_value=0, max_value=60, value=10, step=1)
+    optimized, summary = optimize_budget_allocation(
+        cac_df=cac,
+        profitability_df=profitability,
+        total_budget=float(total_budget),
+        target_max_cac=float(target_max_cac),
+        reserve_pct=float(reserve_pct),
+    )
+    if optimized.empty:
+        st.warning("No eligible channels with positive CAC were found.")
+        return
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Usable Budget", f"{summary.usable_budget:,.0f}")
+    m2.metric("Projected Customers", f"{summary.projected_customers:,.0f}")
+    m3.metric("Projected Value", f"{summary.projected_value:,.0f}")
+    m4.metric("Blended CAC", f"{summary.blended_cac:.2f}")
+    st.caption(f"Projected Value/Spend: **{summary.blended_value_to_spend:.2f}**")
+    if target_max_cac > 0 and summary.blended_cac > target_max_cac:
+        st.warning("Projected blended CAC is still above target. Increase budget efficiency or relax constraints.")
+
+    view = optimized.copy()
+    view["recommended_share_pct"] = view["recommended_share"] * 100.0
+    fig_spend = px.bar(view, x="channel", y="recommended_spend", title="Optimized Spend by Channel")
+    st.plotly_chart(fig_spend, use_container_width=True)
+    fig_value = px.bar(view, x="channel", y="projected_value", title="Projected Value by Channel")
+    st.plotly_chart(fig_value, use_container_width=True)
+    st.dataframe(
+        view[
+            [
+                "channel",
+                "cac",
+                "avg_predicted_ltv",
+                "efficiency_score",
+                "recommended_share_pct",
+                "recommended_spend",
+                "projected_customers",
+                "projected_value",
+                "projected_value_to_spend",
+            ]
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def show_white_label_studio(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("White Label Studio")
+    if not _has_entitlement("white_label_controls"):
+        _show_upgrade_cta(
+            feature="white_label_controls",
+            reason="White-label branding controls are available on Pro / Agency and above.",
+        )
+        return
+
+    current = _get_branding_config()
+    brand_name = st.text_input("Brand Name", value=current.get("brand_name", ""))
+    subtitle = st.text_input("Subtitle", value=current.get("subtitle", ""))
+    primary_color = st.color_picker("Primary Color", value=current.get("primary_color", "#2f6df6"))
+    logo_url = st.text_input("Logo URL", value=current.get("logo_url", ""))
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Save Branding", use_container_width=True):
+            _set_branding_config(
+                {
+                    "brand_name": brand_name,
+                    "subtitle": subtitle,
+                    "primary_color": primary_color,
+                    "logo_url": logo_url,
+                }
+            )
+            st.success("Branding settings saved for this workspace.")
+    with c2:
+        if st.button("Reset Branding", use_container_width=True):
+            _set_branding_config(
+                {
+                    "brand_name": "D2C Marketing & Customer Profitability Analytics",
+                    "subtitle": "CAC, LTV, retention, and profitability insights",
+                    "primary_color": "#2f6df6",
+                    "logo_url": "",
+                }
+            )
+            st.success("Branding reset to defaults.")
+
+    preview = {
+        "brand_name": brand_name,
+        "subtitle": subtitle,
+        "primary_color": primary_color,
+        "logo_url": logo_url,
+    }
+    st.markdown("### Export Brand Kit")
+    st.download_button(
+        "Download Brand Config (JSON)",
+        data=json.dumps(preview, indent=2),
+        file_name="brand_config.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    st.markdown("### Preview")
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
+          <div style="font-size:24px;font-weight:700;color:{primary_color};">{brand_name or 'Brand Name'}</div>
+          <div style="color:#6b7280;">{subtitle or 'Subtitle'}</div>
+          <div style="margin-top:8px;font-size:12px;color:#9ca3af;">Preview shown using current white-label settings.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def show_security_center(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Security Center")
+    if not _has_entitlement("security_center"):
+        _show_upgrade_cta(
+            feature="security_center",
+            reason="Security center controls are not available on your current plan.",
+        )
+        return
+
+    controls = pd.DataFrame(
+        [
+            {"control": "Strict validation default", "status": "pass" if APP_VALIDATION_MODE == "strict" else "warn", "detail": f"VALIDATION_MODE={APP_VALIDATION_MODE}"},
+            {"control": "Proxy spend blocked", "status": "pass" if not APP_ALLOW_PROXY_SPEND else "warn", "detail": f"APP_ALLOW_PROXY_SPEND={int(APP_ALLOW_PROXY_SPEND)}"},
+            {"control": "HTTPS webhook enforcement", "status": "pass" if APP_ENFORCE_HTTPS_WEBHOOKS else "warn", "detail": f"APP_ENFORCE_HTTPS_WEBHOOKS={int(APP_ENFORCE_HTTPS_WEBHOOKS)}"},
+            {"control": "Webhook host allowlist", "status": "pass" if bool(APP_WEBHOOK_ALLOWED_HOSTS) else "warn", "detail": "configured" if APP_WEBHOOK_ALLOWED_HOSTS else "not configured"},
+            {"control": "Webhook payload signing", "status": "pass" if bool(APP_WEBHOOK_SIGNING_SECRET) else "warn", "detail": "X-D2C-Signature enabled" if APP_WEBHOOK_SIGNING_SECRET else "signing secret missing"},
+            {"control": "Audit log capture", "status": "pass", "detail": f"{len(_get_audit_events())} event(s) tracked in session"},
+        ]
+    )
+    pass_count = int((controls["status"] == "pass").sum())
+    warn_count = int((controls["status"] == "warn").sum())
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Controls Passing", pass_count)
+    s2.metric("Controls Warning", warn_count)
+    s3.metric("Webhook Allowlist Hosts", len(APP_WEBHOOK_ALLOWED_HOSTS))
+    st.dataframe(controls, use_container_width=True, hide_index=True)
+
+    st.markdown("### Webhook Policy")
+    if APP_WEBHOOK_ALLOWED_HOSTS:
+        st.caption("Allowed hosts configured via `APP_WEBHOOK_ALLOWED_HOSTS`")
+        st.code(", ".join(sorted(APP_WEBHOOK_ALLOWED_HOSTS)))
+    else:
+        st.warning("No webhook host allowlist set. Configure `APP_WEBHOOK_ALLOWED_HOSTS` to restrict alert endpoints.")
+    if APP_WEBHOOK_SIGNING_SECRET:
+        st.success("Webhook payload signing is enabled via `APP_WEBHOOK_SIGNING_SECRET`.")
+    else:
+        st.info("Set `APP_WEBHOOK_SIGNING_SECRET` to attach HMAC signatures to webhook alerts.")
+
+    st.markdown("### Audit Events")
+    events = _get_audit_events()
+    if not events:
+        st.info("No audit events captured yet in this session.")
+        return
+    events_df = pd.DataFrame(events).sort_values("ts_utc", ascending=False).reset_index(drop=True)
+    st.dataframe(events_df, use_container_width=True, hide_index=True)
+    if _has_entitlement("audit_logs"):
+        if st.download_button(
+            "Download Audit Log (CSV)",
+            data=events_df.to_csv(index=False).encode("utf-8"),
+            file_name="audit_log.csv",
+            mime="text/csv",
+            use_container_width=True,
+        ):
+            _append_audit_event(
+                action="export_audit_log",
+                outcome="success",
+                detail=f"rows={len(events_df)}",
+                category="security",
+            )
+    else:
+        _show_upgrade_cta(
+            feature="audit_logs",
+            reason="Audit log export is available on Pro / Agency and above.",
+        )
+
+
+def show_enterprise_controls(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Enterprise Controls")
+    if not _has_entitlement("enterprise_controls"):
+        _show_upgrade_cta(
+            feature="enterprise_controls",
+            reason="Enterprise controls are available on Enterprise plan.",
+        )
+        return
+
+    plan = _current_plan()
+    members = _get_team_members()
+    seat_limit = int(plan.limits.get("max_workspace_members", 0))
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Seats Used", len(members))
+    e2.metric("Seat Limit", seat_limit)
+    e3.metric("Seats Available", max(seat_limit - len(members), 0))
+
+    st.markdown("### Workspace Access")
+    members_df = pd.DataFrame(members)
+    st.dataframe(members_df, use_container_width=True, hide_index=True)
+    m1, m2 = st.columns(2)
+    with m1:
+        member_name = st.text_input("Member Name", key="enterprise_member_name")
+        member_email = st.text_input("Member Email", key="enterprise_member_email")
+        member_role = st.selectbox("Role", options=["viewer", "analyst", "manager", "admin", "owner"], index=0, key="enterprise_member_role")
+        if st.button("Add Team Member", use_container_width=True):
+            if len(members) >= seat_limit:
+                st.error(f"Seat limit reached ({seat_limit}).")
+            elif "@" not in member_email.strip():
+                st.error("Valid member email is required.")
+            else:
+                members.append(
+                    {
+                        "name": member_name.strip() or "Unnamed",
+                        "email": member_email.strip().lower(),
+                        "role": member_role,
+                        "status": "active",
+                        "added_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                _set_team_members(members)
+                _append_audit_event(
+                    action="add_team_member",
+                    outcome="success",
+                    detail=f"email={mask_destination_target('email', member_email)}, role={member_role}",
+                    category="enterprise",
+                )
+                st.success("Team member added.")
+    with m2:
+        if members:
+            remove_index = st.selectbox(
+                "Remove Member",
+                options=list(range(len(members))),
+                format_func=lambda idx: f"{members[idx].get('email', '')} ({members[idx].get('role', '')})",
+                key="enterprise_remove_member_idx",
+            )
+            if st.button("Remove Team Member", use_container_width=True):
+                removed = members.pop(int(remove_index))
+                _set_team_members(members)
+                _append_audit_event(
+                    action="remove_team_member",
+                    outcome="success",
+                    detail=f"email={mask_destination_target('email', str(removed.get('email', '')))}",
+                    category="enterprise",
+                )
+                st.success("Team member removed.")
+
+    st.markdown("### Identity & Network Policy")
+    policy = _get_security_policy()
+    sso_domain = st.text_input("SSO Domain (e.g. company.com)", value=str(policy.get("sso_domain", "")), key="enterprise_sso_domain")
+    require_sso = st.toggle("Require SSO for all workspace users", value=bool(policy.get("require_sso", False)), key="enterprise_require_sso")
+    ip_allowlist_text = st.text_area(
+        "IP Allowlist (one CIDR/range per line)",
+        value="\n".join(str(v) for v in policy.get("ip_allowlist", [])),
+        key="enterprise_ip_allowlist",
+        height=120,
+    )
+    if st.button("Save Enterprise Policy", use_container_width=True):
+        parsed_ip_allowlist = [line.strip() for line in ip_allowlist_text.splitlines() if line.strip()]
+        _set_security_policy(
+            {
+                "sso_domain": sso_domain,
+                "require_sso": require_sso,
+                "ip_allowlist": parsed_ip_allowlist,
+            }
+        )
+        _append_audit_event(
+            action="save_enterprise_policy",
+            outcome="success",
+            detail=f"sso_domain={sso_domain.strip().lower()}, require_sso={int(require_sso)}, ip_ranges={len(parsed_ip_allowlist)}",
+            category="enterprise",
+        )
+        st.success("Enterprise policy saved.")
+
+    if _has_entitlement("custom_sla"):
+        st.markdown("### SLA Commitments")
+        sla_df = pd.DataFrame(
+            [
+                {"severity": "SEV-1", "response_target": "30 minutes", "resolution_target": "4 hours"},
+                {"severity": "SEV-2", "response_target": "2 hours", "resolution_target": "1 business day"},
+                {"severity": "SEV-3", "response_target": "1 business day", "resolution_target": "3 business days"},
+            ]
+        )
+        st.dataframe(sla_df, use_container_width=True, hide_index=True)
+
+
+def show_partner_hub(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Partner Hub")
+    if not _has_entitlement("partner_hub"):
+        _show_upgrade_cta(
+            feature="partner_hub",
+            reason="Partner pipeline and co-sell workflows are available on Pro / Agency and above.",
+        )
+        return
+
+    opportunities = _get_partner_pipeline()
+    opportunity_limit = int(_current_plan().limits.get("partner_pipeline_opportunities", 0))
+    opportunities_df = pd.DataFrame(opportunities) if opportunities else pd.DataFrame()
+    total_pipeline_arr = float(pd.to_numeric(opportunities_df.get("estimated_arr_usd"), errors="coerce").fillna(0).sum()) if not opportunities_df.empty else 0.0
+    won_count = int((opportunities_df.get("stage", pd.Series(dtype=str)).astype(str).str.lower() == "won").sum()) if not opportunities_df.empty else 0
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Opportunities", len(opportunities))
+    p2.metric("Estimated Pipeline ARR", f"{total_pipeline_arr:,.0f}")
+    p3.metric("Won Deals", won_count)
+    st.caption(f"Usage: {len(opportunities)}/{opportunity_limit} partner opportunities")
+    if APP_PARTNER_REFERRAL_URL:
+        st.markdown(f"[Partner Referral Link]({APP_PARTNER_REFERRAL_URL})")
+
+    if not opportunities_df.empty:
+        st.dataframe(opportunities_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No partner opportunities logged yet.")
+
+    st.markdown("### Register Partner Opportunity")
+    company = st.text_input("Company", key="partner_company")
+    partner_type = st.selectbox("Partner Type", options=["agency", "system_integrator", "technology_partner", "affiliate"], key="partner_type")
+    stage = st.selectbox("Stage", options=["qualified", "proposal", "pilot", "won", "lost"], key="partner_stage")
+    estimated_arr_usd = st.number_input("Estimated ARR (USD)", min_value=0.0, value=12000.0, step=1000.0, key="partner_est_arr")
+    owner = st.text_input("Opportunity Owner", value="BD Team", key="partner_owner")
+    if st.button("Add Opportunity", use_container_width=True):
+        if len(opportunities) >= opportunity_limit:
+            _show_upgrade_cta(
+                feature="partner_hub",
+                reason=f"Opportunity limit reached ({opportunity_limit}) for this plan.",
+            )
+        elif not company.strip():
+            st.error("Company name is required.")
+        else:
+            opportunities.append(
+                {
+                    "company": company.strip(),
+                    "partner_type": partner_type,
+                    "stage": stage,
+                    "estimated_arr_usd": float(estimated_arr_usd),
+                    "owner": owner.strip() or "BD Team",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            _set_partner_pipeline(opportunities)
+            _append_audit_event(
+                action="add_partner_opportunity",
+                outcome="success",
+                detail=f"company={company.strip()}, stage={stage}, est_arr={float(estimated_arr_usd):.0f}",
+                category="partner",
+            )
+            st.success("Partner opportunity added.")
+
+    if opportunities:
+        st.markdown("### Update Opportunity Stage")
+        selected_idx = st.selectbox(
+            "Opportunity",
+            options=list(range(len(opportunities))),
+            format_func=lambda idx: f"{opportunities[idx].get('company', '')} ({opportunities[idx].get('stage', '')})",
+            key="partner_update_idx",
+        )
+        new_stage = st.selectbox("New Stage", options=["qualified", "proposal", "pilot", "won", "lost"], key="partner_update_stage")
+        if st.button("Update Stage", use_container_width=True):
+            opportunities[int(selected_idx)]["stage"] = new_stage
+            _set_partner_pipeline(opportunities)
+            _append_audit_event(
+                action="update_partner_stage",
+                outcome="success",
+                detail=f"company={opportunities[int(selected_idx)].get('company', '')}, stage={new_stage}",
+                category="partner",
+            )
+            st.success("Opportunity stage updated.")
+
+    st.markdown("### Co-Sell Template Export")
+    cosell_template = pd.DataFrame(
+        [
+            {"section": "brand_positioning", "value": "Profitability analytics with upload-first strict data controls"},
+            {"section": "target_profile", "value": "D2C brands spending across 3+ paid channels"},
+            {"section": "pilot_offer", "value": "14-day activation sprint + KPI baseline and optimization roadmap"},
+        ]
+    )
+    st.download_button(
+        "Download Co-Sell Template (CSV)",
+        data=cosell_template.to_csv(index=False).encode("utf-8"),
+        file_name="partner_cosell_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Anomaly Alerts")
     _render_alert_destination_manager()
@@ -1466,13 +2211,13 @@ def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="D2C Profitability Analytics", layout="wide")
-    st.title("D2C Marketing & Customer Profitability Analytics")
-    st.caption("CAC, LTV, retention, and profitability insights")
+    _apply_branding_styles()
+    _render_brand_header()
     _render_workspace_and_plan_sidebar()
     show_advanced_pages = st.sidebar.toggle(
         "Show advanced pages",
         value=False,
-        help="Enable anomaly, cohort, customer, and budget-planner pages.",
+        help="Enable diagnostics, security, enterprise, partner, and advanced analytics pages.",
     )
     page_options = _available_pages_for_current_plan(show_advanced_pages)
     page = st.sidebar.radio("Page", page_options)
@@ -1511,6 +2256,12 @@ def main() -> None:
         "Channel Performance": show_channel_performance,
         "Connectors & Sync": show_connectors_and_sync,
         "What Changed": show_what_changed,
+        "Security Center": show_security_center,
+        "Enterprise Controls": show_enterprise_controls,
+        "Partner Hub": show_partner_hub,
+        "Attribution Deep Dive": show_attribution_deep_dive,
+        "Scenario Optimizer": show_scenario_optimizer,
+        "White Label Studio": show_white_label_studio,
         "Cohort Retention & LTV": show_retention_ltv,
         "Customer Profitability": show_customer_profitability,
         "Data Quality": show_data_quality,

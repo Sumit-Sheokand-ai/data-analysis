@@ -43,6 +43,12 @@ End-to-end analytics project for a D2C brand with:
 - Connectors & Sync control center with connector health checks
 - What Changed diagnostics using previous-vs-current KPI snapshots
 - Alert destination manager (email/webhook test dispatch)
+- Attribution Deep Dive (touch-depth + first-touch vs last-non-direct crosswalk)
+- Scenario Optimizer (constraint-aware budget recommendation engine)
+- White Label Studio (brand name/color/logo configuration + brand-kit export)
+- Security Center (webhook policy hardening + session audit log visibility/export)
+- Enterprise Controls (seat/role management, SSO policy, IP allowlist, SLA panel)
+- Partner Hub (opportunity pipeline tracking and co-sell template export)
 
 ### Optional environment variables for billing UX
 - `APP_PLAN` (default: `starter`)
@@ -54,6 +60,10 @@ End-to-end analytics project for a D2C brand with:
 - `APP_SYNC_DEFAULT_FREQUENCY` (default sync job frequency, e.g. `daily`)
 - `APP_SYNC_DEFAULT_HOUR_UTC` (default UTC hour for sync jobs)
 - `APP_WEBHOOK_TIMEOUT_SECONDS` (timeout for webhook test dispatch)
+- `APP_WEBHOOK_ALLOWED_HOSTS` (comma-separated webhook host allowlist for alert destinations)
+- `APP_ENFORCE_HTTPS_WEBHOOKS` (default: `1`; enforce HTTPS webhook targets except localhost)
+- `APP_WEBHOOK_SIGNING_SECRET` (optional HMAC secret for `X-D2C-Signature` webhook header)
+- `APP_PARTNER_REFERRAL_URL` (optional link shown in Partner Hub for referral flow)
 ## Real export connectors (Shopify + GA4)
 Map real platform exports into canonical raw tables:
 - `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`
