@@ -51,6 +51,8 @@ End-to-end analytics project for a D2C brand with:
 - Partner Hub (opportunity pipeline tracking and co-sell template export)
 - Growth Copilot (AI-prioritized growth actions from CAC/LTV/retention/anomaly signals)
 - Experiment Studio (hypothesis backlog, status workflow, and experiment log export)
+- Playbook Automation (convert signals to executable owner/SLA playbook tasks)
+- ROI Forecast (experiment-weighted projected revenue impact for next planning window)
 
 ### Optional environment variables for billing UX
 - `APP_PLAN` (default: `starter`)
@@ -67,6 +69,7 @@ End-to-end analytics project for a D2C brand with:
 - `APP_WEBHOOK_SIGNING_SECRET` (optional HMAC secret for `X-D2C-Signature` webhook header)
 - `APP_PARTNER_REFERRAL_URL` (optional link shown in Partner Hub for referral flow)
 - `APP_COPILOT_MAX_RECOMMENDATIONS` (max actions generated per Growth Copilot batch; default `6`)
+- `APP_FORECAST_PERIOD_DAYS` (default horizon for ROI Forecast in days; default `90`)
 ## Real export connectors (Shopify + GA4)
 Map real platform exports into canonical raw tables:
 - `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`

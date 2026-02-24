@@ -57,6 +57,7 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "what_changed_diagnostics",
                 "security_center",
                 "growth_experiments",
+                "playbook_automation",
             }
         ),
         limits={
@@ -68,6 +69,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "partner_pipeline_opportunities": 0,
             "active_experiments": 10,
             "monthly_ai_insights": 0,
+            "active_playbooks": 25,
+            "monthly_forecasts": 2,
         },
     ),
     "pro": Plan(
@@ -101,6 +104,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "partner_hub",
                 "ai_growth_copilot",
                 "growth_experiments",
+                "playbook_automation",
+                "roi_forecasting",
             }
         ),
         limits={
@@ -112,6 +117,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "partner_pipeline_opportunities": 200,
             "active_experiments": 100,
             "monthly_ai_insights": 300,
+            "active_playbooks": 200,
+            "monthly_forecasts": 30,
         },
     ),
     "enterprise": Plan(
@@ -149,6 +156,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "scim_provisioning",
                 "ai_growth_copilot",
                 "growth_experiments",
+                "playbook_automation",
+                "roi_forecasting",
                 "sso",
                 "custom_sla",
             }
@@ -162,6 +171,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "partner_pipeline_opportunities": 999999,
             "active_experiments": 999999,
             "monthly_ai_insights": 999999,
+            "active_playbooks": 999999,
+            "monthly_forecasts": 999999,
         },
     ),
 }

@@ -77,6 +77,18 @@ try:
 except ModuleNotFoundError:
     from analysis.recommendations import build_growth_recommendations
 try:
+    from python.analysis.playbooks import (
+        build_experiment_roi_forecast,
+        seed_playbooks_from_signals,
+        summarize_playbook_status,
+    )
+except ModuleNotFoundError:
+    from analysis.playbooks import (
+        build_experiment_roi_forecast,
+        seed_playbooks_from_signals,
+        summarize_playbook_status,
+    )
+try:
     from python.analysis.security import (
         build_webhook_signature,
         mask_destination_target,
@@ -114,6 +126,7 @@ APP_ENFORCE_HTTPS_WEBHOOKS = os.getenv("APP_ENFORCE_HTTPS_WEBHOOKS", "1").strip(
 APP_WEBHOOK_SIGNING_SECRET = os.getenv("APP_WEBHOOK_SIGNING_SECRET", "").strip()
 APP_PARTNER_REFERRAL_URL = os.getenv("APP_PARTNER_REFERRAL_URL", "").strip()
 APP_COPILOT_MAX_RECOMMENDATIONS = int(os.getenv("APP_COPILOT_MAX_RECOMMENDATIONS", "6").strip() or 6)
+APP_FORECAST_PERIOD_DAYS = int(os.getenv("APP_FORECAST_PERIOD_DAYS", "90").strip() or 90)
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 
@@ -142,6 +155,8 @@ PAGE_FEATURE_REQUIREMENTS = {
     "Partner Hub": "partner_hub",
     "Growth Copilot": "ai_growth_copilot",
     "Experiment Studio": "growth_experiments",
+    "Playbook Automation": "playbook_automation",
+    "ROI Forecast": "roi_forecasting",
 }
 
 CANONICAL_RAW_FILES = {
@@ -162,6 +177,7 @@ TEAM_MEMBERS_STATE_KEY = "team_members"
 SECURITY_POLICY_STATE_KEY = "security_policy"
 PARTNER_PIPELINE_STATE_KEY = "partner_pipeline"
 EXPERIMENTS_STATE_KEY = "growth_experiments"
+PLAYBOOKS_STATE_KEY = "activation_playbooks"
 
 CORE_PAGES = [
     "No-Code Upload Center",
@@ -178,6 +194,8 @@ ADVANCED_PAGES = [
     "Partner Hub",
     "Growth Copilot",
     "Experiment Studio",
+    "Playbook Automation",
+    "ROI Forecast",
     "Attribution Deep Dive",
     "Scenario Optimizer",
     "White Label Studio",
@@ -230,6 +248,8 @@ def _get_usage_counters() -> dict[str, int]:
             "alert_dispatches": 0,
             "ai_insights_generated": 0,
             "experiments_logged": 0,
+            "playbooks_created": 0,
+            "forecasts_generated": 0,
         }
     return st.session_state[USAGE_COUNTERS_STATE_KEY]
 
@@ -313,6 +333,14 @@ def _get_growth_experiments() -> list[dict[str, str | float]]:
 
 def _set_growth_experiments(experiments: list[dict[str, str | float]]) -> None:
     st.session_state[EXPERIMENTS_STATE_KEY] = experiments
+def _get_activation_playbooks() -> list[dict[str, str | float | int]]:
+    if PLAYBOOKS_STATE_KEY not in st.session_state:
+        st.session_state[PLAYBOOKS_STATE_KEY] = []
+    return st.session_state[PLAYBOOKS_STATE_KEY]
+
+
+def _set_activation_playbooks(playbooks: list[dict[str, str | float | int]]) -> None:
+    st.session_state[PLAYBOOKS_STATE_KEY] = playbooks
 
 
 def _get_alert_destinations() -> list[dict[str, str]]:
@@ -2268,6 +2296,196 @@ def show_experiment_studio(data: dict[str, pd.DataFrame] | None = None) -> None:
         use_container_width=True,
     )
 
+def show_playbook_automation(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Playbook Automation")
+    if not _has_entitlement("playbook_automation"):
+        _show_upgrade_cta(
+            feature="playbook_automation",
+            reason="Playbook automation is available on Growth and above.",
+        )
+        return
+
+    playbooks = _get_activation_playbooks()
+    plan = _current_plan()
+    active_limit = int(plan.limits.get("active_playbooks", 0))
+    summary = summarize_playbook_status(pd.DataFrame(playbooks))
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Open", summary.get("open", 0))
+    p2.metric("In Progress", summary.get("in_progress", 0))
+    p3.metric("Completed", summary.get("completed", 0))
+    p4.metric("Active Limit", active_limit)
+
+    if st.button("Generate Playbooks from Current Signals", use_container_width=True, key="playbooks_generate_btn"):
+        recommendations = build_growth_recommendations(
+            cac_df=data.get("cac", pd.DataFrame()),
+            profitability_df=data.get("profitability", pd.DataFrame()),
+            retention_df=data.get("retention", pd.DataFrame()),
+            anomaly_df=data.get("anomaly", pd.DataFrame()),
+            max_items=APP_COPILOT_MAX_RECOMMENDATIONS,
+        )
+        seeded_df = seed_playbooks_from_signals(
+            recommendations_df=recommendations,
+            anomaly_df=data.get("anomaly", pd.DataFrame()),
+            max_items=10,
+        )
+        incoming = seeded_df.to_dict("records")
+        current_active = sum(
+            1
+            for row in playbooks
+            if str(row.get("status", "")).strip().lower() in {"open", "in_progress"}
+        )
+        available_slots = max(active_limit - current_active, 0)
+        to_add = incoming[:available_slots]
+        if not to_add:
+            st.warning(f"Active playbook limit reached ({active_limit}) for this plan.")
+        else:
+            playbooks.extend(to_add)
+            _set_activation_playbooks(playbooks)
+            _increment_usage_counter("playbooks_created", len(to_add))
+            _append_audit_event(
+                action="generate_playbooks",
+                outcome="success",
+                detail=f"added={len(to_add)}, active_limit={active_limit}",
+                category="playbooks",
+            )
+            st.success(f"Added {len(to_add)} playbook item(s).")
+
+    if not playbooks:
+        st.info("No playbooks yet. Generate from current signals to start execution workflow.")
+        return
+
+    playbook_df = pd.DataFrame(playbooks)
+    st.dataframe(playbook_df, use_container_width=True, hide_index=True)
+
+    st.markdown("### Update Playbook Status")
+    selected_idx = st.selectbox(
+        "Playbook Item",
+        options=list(range(len(playbooks))),
+        format_func=lambda idx: f"{playbooks[idx].get('title', '')} ({playbooks[idx].get('status', '')})",
+        key="playbook_update_idx",
+    )
+    new_status = st.selectbox(
+        "New Status",
+        options=["open", "in_progress", "completed", "blocked"],
+        key="playbook_update_status",
+    )
+    owner = st.text_input(
+        "Owner",
+        value=str(playbooks[int(selected_idx)].get("owner", "Growth Team")),
+        key="playbook_update_owner",
+    )
+    if st.button("Save Playbook Update", use_container_width=True, key="playbook_update_btn"):
+        playbooks[int(selected_idx)]["status"] = new_status
+        playbooks[int(selected_idx)]["owner"] = owner.strip() or "Growth Team"
+        playbooks[int(selected_idx)]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _set_activation_playbooks(playbooks)
+        _append_audit_event(
+            action="update_playbook_status",
+            outcome="success",
+            detail=f"title={playbooks[int(selected_idx)].get('title', '')}, status={new_status}",
+            category="playbooks",
+        )
+        st.success("Playbook updated.")
+
+    st.download_button(
+        "Download Playbook Log (CSV)",
+        data=pd.DataFrame(playbooks).to_csv(index=False).encode("utf-8"),
+        file_name="playbook_log.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+def show_roi_forecast(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("ROI Forecast")
+    if not _has_entitlement("roi_forecasting"):
+        _show_upgrade_cta(
+            feature="roi_forecasting",
+            reason="ROI forecasting is available on Pro / Agency and above.",
+        )
+        return
+
+    usage = _get_usage_counters()
+    plan = _current_plan()
+    monthly_limit = int(plan.limits.get("monthly_forecasts", 0))
+    used = int(usage.get("forecasts_generated", 0))
+    remaining = max(monthly_limit - used, 0)
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Forecasts Used", used)
+    f2.metric("Monthly Forecast Limit", monthly_limit)
+    f3.metric("Forecasts Left", remaining)
+
+    if remaining <= 0:
+        _show_upgrade_cta(
+            feature="roi_forecasting",
+            reason=f"You reached your monthly forecast limit ({monthly_limit}).",
+        )
+        return
+
+    period_days = st.number_input(
+        "Forecast Horizon (days)",
+        min_value=30,
+        max_value=365,
+        value=max(min(APP_FORECAST_PERIOD_DAYS, 365), 30),
+        step=30,
+        key="roi_forecast_days",
+    )
+    if st.button("Generate Forecast Snapshot", use_container_width=True, key="roi_forecast_generate"):
+        _increment_usage_counter("forecasts_generated")
+        _append_audit_event(
+            action="generate_roi_forecast",
+            outcome="success",
+            detail=f"horizon_days={int(period_days)}, used_after={used + 1}",
+            category="forecast",
+        )
+        st.success("Forecast snapshot generated.")
+
+    experiments = pd.DataFrame(_get_growth_experiments())
+    if experiments.empty:
+        st.info("No experiments available yet. Add experiments in Experiment Studio first.")
+        return
+
+    overview = data.get("overview", pd.DataFrame())
+    baseline_net_revenue = 0.0
+    if not overview.empty and {"metric", "value"}.issubset(overview.columns):
+        row = overview.loc[overview["metric"].astype(str).str.strip().eq("total_net_revenue"), "value"]
+        if not row.empty:
+            baseline_net_revenue = float(pd.to_numeric(row.iloc[0], errors="coerce") or 0.0)
+    baseline_input = st.number_input(
+        "Baseline Net Revenue (for forecast period)",
+        min_value=0.0,
+        value=round(max(baseline_net_revenue, 0.0), 2),
+        step=1000.0,
+        key="roi_forecast_baseline_revenue",
+    )
+
+    forecast_df = build_experiment_roi_forecast(
+        experiments_df=experiments,
+        profitability_df=data.get("profitability", pd.DataFrame()),
+        baseline_net_revenue=float(baseline_input),
+        period_days=int(period_days),
+    )
+    if forecast_df.empty:
+        st.info("No forecastable experiments found.")
+        return
+
+    total_delta = float(pd.to_numeric(forecast_df["projected_revenue_delta"], errors="coerce").fillna(0.0).sum())
+    uplift_pct = (total_delta / baseline_input * 100.0) if baseline_input > 0 else 0.0
+    high_conf = int((pd.to_numeric(forecast_df["confidence_factor"], errors="coerce").fillna(0.0) >= 0.6).sum())
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Projected Revenue Delta", f"{total_delta:,.0f}")
+    r2.metric("Projected Uplift %", f"{uplift_pct:.2f}%")
+    r3.metric("High-Confidence Experiments", high_conf)
+
+    st.dataframe(forecast_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download ROI Forecast (CSV)",
+        data=forecast_df.to_csv(index=False).encode("utf-8"),
+        file_name="roi_forecast.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
 
 def show_partner_hub(data: dict[str, pd.DataFrame] | None = None) -> None:
     st.subheader("Partner Hub")
@@ -2462,6 +2680,8 @@ def main() -> None:
         "Partner Hub": show_partner_hub,
         "Growth Copilot": show_growth_copilot,
         "Experiment Studio": show_experiment_studio,
+        "Playbook Automation": show_playbook_automation,
+        "ROI Forecast": show_roi_forecast,
         "Attribution Deep Dive": show_attribution_deep_dive,
         "Scenario Optimizer": show_scenario_optimizer,
         "White Label Studio": show_white_label_studio,
