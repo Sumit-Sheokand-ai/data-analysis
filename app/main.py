@@ -73,6 +73,10 @@ try:
 except ModuleNotFoundError:
     from analysis.optimizer import optimize_budget_allocation
 try:
+    from python.analysis.recommendations import build_growth_recommendations
+except ModuleNotFoundError:
+    from analysis.recommendations import build_growth_recommendations
+try:
     from python.analysis.security import (
         build_webhook_signature,
         mask_destination_target,
@@ -109,6 +113,7 @@ APP_WEBHOOK_ALLOWED_HOSTS = parse_webhook_allowed_hosts(os.getenv("APP_WEBHOOK_A
 APP_ENFORCE_HTTPS_WEBHOOKS = os.getenv("APP_ENFORCE_HTTPS_WEBHOOKS", "1").strip().lower() in {"1", "true", "yes", "y"}
 APP_WEBHOOK_SIGNING_SECRET = os.getenv("APP_WEBHOOK_SIGNING_SECRET", "").strip()
 APP_PARTNER_REFERRAL_URL = os.getenv("APP_PARTNER_REFERRAL_URL", "").strip()
+APP_COPILOT_MAX_RECOMMENDATIONS = int(os.getenv("APP_COPILOT_MAX_RECOMMENDATIONS", "6").strip() or 6)
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 
@@ -135,6 +140,8 @@ PAGE_FEATURE_REQUIREMENTS = {
     "Security Center": "security_center",
     "Enterprise Controls": "enterprise_controls",
     "Partner Hub": "partner_hub",
+    "Growth Copilot": "ai_growth_copilot",
+    "Experiment Studio": "growth_experiments",
 }
 
 CANONICAL_RAW_FILES = {
@@ -154,6 +161,7 @@ AUDIT_LOG_STATE_KEY = "audit_log_events"
 TEAM_MEMBERS_STATE_KEY = "team_members"
 SECURITY_POLICY_STATE_KEY = "security_policy"
 PARTNER_PIPELINE_STATE_KEY = "partner_pipeline"
+EXPERIMENTS_STATE_KEY = "growth_experiments"
 
 CORE_PAGES = [
     "No-Code Upload Center",
@@ -168,6 +176,8 @@ ADVANCED_PAGES = [
     "Security Center",
     "Enterprise Controls",
     "Partner Hub",
+    "Growth Copilot",
+    "Experiment Studio",
     "Attribution Deep Dive",
     "Scenario Optimizer",
     "White Label Studio",
@@ -218,6 +228,8 @@ def _get_usage_counters() -> dict[str, int]:
             "connector_sync_runs": 0,
             "alerts_acknowledged": 0,
             "alert_dispatches": 0,
+            "ai_insights_generated": 0,
+            "experiments_logged": 0,
         }
     return st.session_state[USAGE_COUNTERS_STATE_KEY]
 
@@ -292,6 +304,15 @@ def _get_partner_pipeline() -> list[dict[str, str | float]]:
 
 def _set_partner_pipeline(pipeline: list[dict[str, str | float]]) -> None:
     st.session_state[PARTNER_PIPELINE_STATE_KEY] = pipeline
+
+def _get_growth_experiments() -> list[dict[str, str | float]]:
+    if EXPERIMENTS_STATE_KEY not in st.session_state:
+        st.session_state[EXPERIMENTS_STATE_KEY] = []
+    return st.session_state[EXPERIMENTS_STATE_KEY]
+
+
+def _set_growth_experiments(experiments: list[dict[str, str | float]]) -> None:
+    st.session_state[EXPERIMENTS_STATE_KEY] = experiments
 
 
 def _get_alert_destinations() -> list[dict[str, str]]:
@@ -2068,6 +2089,186 @@ def show_enterprise_controls(data: dict[str, pd.DataFrame] | None = None) -> Non
         st.dataframe(sla_df, use_container_width=True, hide_index=True)
 
 
+def show_growth_copilot(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Growth Copilot")
+    if not _has_entitlement("ai_growth_copilot"):
+        _show_upgrade_cta(
+            feature="ai_growth_copilot",
+            reason="AI growth copilot is available on Pro / Agency and above.",
+        )
+        return
+
+    usage = _get_usage_counters()
+    plan = _current_plan()
+    monthly_limit = int(plan.limits.get("monthly_ai_insights", 0))
+    used = int(usage.get("ai_insights_generated", 0))
+    remaining = max(monthly_limit - used, 0)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("AI Insights Used", used)
+    c2.metric("AI Insights Limit", monthly_limit)
+    c3.metric("AI Insights Left", remaining)
+
+    if remaining <= 0:
+        _show_upgrade_cta(
+            feature="ai_growth_copilot",
+            reason=f"You reached your monthly AI insight limit ({monthly_limit}).",
+        )
+        return
+
+    if st.button("Generate New Recommendations", use_container_width=True, key="copilot_generate_recos"):
+        _increment_usage_counter("ai_insights_generated")
+        _append_audit_event(
+            action="generate_growth_recommendations",
+            outcome="success",
+            detail=f"limit={monthly_limit}, used_after={used + 1}",
+            category="copilot",
+        )
+        st.success("Generated a new recommendation batch.")
+
+    recommendations = build_growth_recommendations(
+        cac_df=data.get("cac", pd.DataFrame()),
+        profitability_df=data.get("profitability", pd.DataFrame()),
+        retention_df=data.get("retention", pd.DataFrame()),
+        anomaly_df=data.get("anomaly", pd.DataFrame()),
+        max_items=APP_COPILOT_MAX_RECOMMENDATIONS,
+    )
+    st.dataframe(recommendations, use_container_width=True, hide_index=True)
+
+    if not recommendations.empty:
+        top_action = str(recommendations.iloc[0].get("action", "")).strip()
+        if st.button("Create Experiment from Top Recommendation", use_container_width=True, key="copilot_seed_experiment"):
+            experiments = _get_growth_experiments()
+            experiments.append(
+                {
+                    "name": "Copilot Action Test",
+                    "owner": "Growth Team",
+                    "status": "planned",
+                    "channel": "mixed",
+                    "hypothesis": top_action or "Validate top copilot recommendation",
+                    "target_metric": "blended_cac",
+                    "target_uplift_pct": 10.0,
+                    "start_date": datetime.now(timezone.utc).date().isoformat(),
+                    "end_date": "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            _set_growth_experiments(experiments)
+            _increment_usage_counter("experiments_logged")
+            _append_audit_event(
+                action="seed_experiment_from_copilot",
+                outcome="success",
+                detail="created_experiment=Copilot Action Test",
+                category="copilot",
+            )
+            st.success("Experiment created in Experiment Studio.")
+
+
+def show_experiment_studio(data: dict[str, pd.DataFrame] | None = None) -> None:
+    st.subheader("Experiment Studio")
+    if not _has_entitlement("growth_experiments"):
+        _show_upgrade_cta(
+            feature="growth_experiments",
+            reason="Experiment workflow is available on Growth and above.",
+        )
+        return
+
+    experiments = _get_growth_experiments()
+    plan = _current_plan()
+    active_limit = int(plan.limits.get("active_experiments", 0))
+    active_statuses = {"planned", "running"}
+    active_count = sum(1 for item in experiments if str(item.get("status", "")).strip().lower() in active_statuses)
+    completed_count = sum(1 for item in experiments if str(item.get("status", "")).strip().lower() == "completed")
+
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Active Experiments", active_count)
+    e2.metric("Active Limit", active_limit)
+    e3.metric("Completed Experiments", completed_count)
+
+    st.markdown("### Create Experiment")
+    ex_name = st.text_input("Experiment Name", key="exp_name")
+    ex_owner = st.text_input("Owner", value="Growth Team", key="exp_owner")
+    ex_channel = st.text_input("Channel / Segment", value="all", key="exp_channel")
+    ex_hypothesis = st.text_area("Hypothesis", key="exp_hypothesis", height=90)
+    ex_metric = st.selectbox("Target Metric", options=["blended_cac", "ltv_cac_ratio", "month1_retention", "conversion_rate"], key="exp_metric")
+    ex_uplift = st.number_input("Target Uplift (%)", min_value=-100.0, max_value=500.0, value=10.0, step=1.0, key="exp_uplift")
+    ex_start = st.date_input("Start Date", value=datetime.now(timezone.utc).date(), key="exp_start")
+    ex_end = st.date_input("End Date", value=datetime.now(timezone.utc).date(), key="exp_end")
+
+    if st.button("Add Experiment", use_container_width=True, key="exp_add"):
+        if active_count >= active_limit:
+            _show_upgrade_cta(
+                feature="growth_experiments",
+                reason=f"Active experiment limit reached ({active_limit}) for this plan.",
+            )
+        elif not ex_name.strip():
+            st.error("Experiment name is required.")
+        elif not ex_hypothesis.strip():
+            st.error("Hypothesis is required.")
+        else:
+            experiments.append(
+                {
+                    "name": ex_name.strip(),
+                    "owner": ex_owner.strip() or "Growth Team",
+                    "status": "planned",
+                    "channel": ex_channel.strip() or "all",
+                    "hypothesis": ex_hypothesis.strip(),
+                    "target_metric": ex_metric,
+                    "target_uplift_pct": float(ex_uplift),
+                    "start_date": ex_start.isoformat(),
+                    "end_date": ex_end.isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            _set_growth_experiments(experiments)
+            _increment_usage_counter("experiments_logged")
+            _append_audit_event(
+                action="add_experiment",
+                outcome="success",
+                detail=f"name={ex_name.strip()}, metric={ex_metric}",
+                category="experiments",
+            )
+            st.success("Experiment added.")
+
+    if not experiments:
+        st.info("No experiments yet. Add your first test above.")
+        return
+
+    exp_df = pd.DataFrame(experiments)
+    st.markdown("### Experiment Backlog")
+    st.dataframe(exp_df, use_container_width=True, hide_index=True)
+
+    st.markdown("### Update Experiment Status")
+    selected_idx = st.selectbox(
+        "Experiment",
+        options=list(range(len(experiments))),
+        format_func=lambda idx: f"{experiments[idx].get('name', '')} ({experiments[idx].get('status', '')})",
+        key="exp_update_idx",
+    )
+    next_status = st.selectbox("New Status", options=["planned", "running", "completed", "archived"], key="exp_update_status")
+    notes = st.text_input("Update Note", value="", key="exp_update_note")
+    if st.button("Save Status Update", use_container_width=True, key="exp_update_btn"):
+        experiments[int(selected_idx)]["status"] = next_status
+        experiments[int(selected_idx)]["last_note"] = notes.strip()
+        experiments[int(selected_idx)]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _set_growth_experiments(experiments)
+        _append_audit_event(
+            action="update_experiment_status",
+            outcome="success",
+            detail=f"name={experiments[int(selected_idx)].get('name', '')}, status={next_status}",
+            category="experiments",
+        )
+        st.success("Experiment updated.")
+
+    st.download_button(
+        "Download Experiment Log (CSV)",
+        data=pd.DataFrame(experiments).to_csv(index=False).encode("utf-8"),
+        file_name="experiment_log.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 def show_partner_hub(data: dict[str, pd.DataFrame] | None = None) -> None:
     st.subheader("Partner Hub")
     if not _has_entitlement("partner_hub"):
@@ -2259,6 +2460,8 @@ def main() -> None:
         "Security Center": show_security_center,
         "Enterprise Controls": show_enterprise_controls,
         "Partner Hub": show_partner_hub,
+        "Growth Copilot": show_growth_copilot,
+        "Experiment Studio": show_experiment_studio,
         "Attribution Deep Dive": show_attribution_deep_dive,
         "Scenario Optimizer": show_scenario_optimizer,
         "White Label Studio": show_white_label_studio,

@@ -56,6 +56,7 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "connector_sync",
                 "what_changed_diagnostics",
                 "security_center",
+                "growth_experiments",
             }
         ),
         limits={
@@ -65,6 +66,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "alert_destinations": 3,
             "max_workspace_members": 5,
             "partner_pipeline_opportunities": 0,
+            "active_experiments": 10,
+            "monthly_ai_insights": 0,
         },
     ),
     "pro": Plan(
@@ -96,6 +99,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "security_center",
                 "audit_logs",
                 "partner_hub",
+                "ai_growth_copilot",
+                "growth_experiments",
             }
         ),
         limits={
@@ -105,6 +110,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "alert_destinations": 20,
             "max_workspace_members": 25,
             "partner_pipeline_opportunities": 200,
+            "active_experiments": 100,
+            "monthly_ai_insights": 300,
         },
     ),
     "enterprise": Plan(
@@ -140,6 +147,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
                 "rbac",
                 "ip_allowlist",
                 "scim_provisioning",
+                "ai_growth_copilot",
+                "growth_experiments",
                 "sso",
                 "custom_sla",
             }
@@ -151,6 +160,8 @@ PLAN_CATALOG: Dict[PlanSlug, Plan] = {
             "alert_destinations": 9999,
             "max_workspace_members": 9999,
             "partner_pipeline_opportunities": 999999,
+            "active_experiments": 999999,
+            "monthly_ai_insights": 999999,
         },
     ),
 }

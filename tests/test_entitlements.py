@@ -27,6 +27,8 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("growth", "connector_sync")
     assert has_feature("growth", "what_changed_diagnostics")
     assert has_feature("growth", "security_center")
+    assert has_feature("growth", "growth_experiments")
+    assert not has_feature("growth", "ai_growth_copilot")
     assert not has_feature("growth", "attribution_depth")
     assert not has_feature("growth", "partner_hub")
     assert has_feature("pro", "slack_webhooks")
@@ -35,9 +37,12 @@ def test_feature_flag_coverage_by_plan() -> None:
     assert has_feature("pro", "white_label_controls")
     assert has_feature("pro", "audit_logs")
     assert has_feature("pro", "partner_hub")
+    assert has_feature("pro", "ai_growth_copilot")
+    assert has_feature("pro", "growth_experiments")
     assert not has_feature("pro", "enterprise_controls")
     assert has_feature("enterprise", "enterprise_controls")
     assert has_feature("enterprise", "scim_provisioning")
+    assert has_feature("enterprise", "ai_growth_copilot")
 
 
 def test_next_plan_for_feature_returns_upgrade_target() -> None:
@@ -45,6 +50,5 @@ def test_next_plan_for_feature_returns_upgrade_target() -> None:
     assert upgrade_for_starter is not None
     assert upgrade_for_starter.slug == "growth"
     upgrade_for_pro = next_plan_for_feature("pro", "enterprise_controls")
-    upgrade_for_pro = next_plan_for_feature("pro", "sso")
     assert upgrade_for_pro is not None
     assert upgrade_for_pro.slug == "enterprise"
