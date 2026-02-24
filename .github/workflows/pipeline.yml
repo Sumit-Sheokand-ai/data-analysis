@@ -20,6 +20,13 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Preflight pipeline service health (optional)
+        env:
+          PIPELINE_SERVICE_URL: ${{ secrets.PIPELINE_SERVICE_URL }}
+        run: |
+          if [ -n "$PIPELINE_SERVICE_URL" ]; then
+            python -m python.pipeline.check_service_health --pipeline-url "$PIPELINE_SERVICE_URL" --timeout-seconds 10
+          fi
       - name: Prepare canonical raw data (CI fixture)
         run: |
           python -m python.pipeline.map_maven_fuzzy_factory \
@@ -31,11 +38,20 @@ jobs:
       - name: Run pipeline (CSV fallback)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PIPELINE_SERVICE_URL: ${{ secrets.PIPELINE_SERVICE_URL }}
         run: |
-          if [ -n "$DATABASE_URL" ]; then
-            python -m python.pipeline.run_pipeline --data-source postgres --database-url "$DATABASE_URL"
+          if [ -n "$PIPELINE_SERVICE_URL" ]; then
+            if [ -n "$DATABASE_URL" ]; then
+              python -m python.pipeline.run_pipeline --data-source postgres --database-url "$DATABASE_URL" --service-url "$PIPELINE_SERVICE_URL"
+            else
+              python -m python.pipeline.run_pipeline --data-source csv --service-url "$PIPELINE_SERVICE_URL"
+            fi
           else
-            python -m python.pipeline.run_pipeline --data-source csv
+            if [ -n "$DATABASE_URL" ]; then
+              python -m python.pipeline.run_pipeline --data-source postgres --database-url "$DATABASE_URL"
+            else
+              python -m python.pipeline.run_pipeline --data-source csv
+            fi
           fi
 
       - name: Run tests

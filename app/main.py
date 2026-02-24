@@ -23,9 +23,25 @@ if PYTHON_DIR_STR not in sys.path:
     sys.path.insert(0, PYTHON_DIR_STR)
 
 try:
-    from python.analysis.pipeline import run_pipeline
+    from python.services.pipeline_service import trigger_pipeline_job
 except ModuleNotFoundError:
-    from analysis.pipeline import run_pipeline
+    from services.pipeline_service import trigger_pipeline_job
+try:
+    from python.services.policy_service import (
+        get_usage_counters as get_policy_usage_counters,
+        has_feature_for_plan,
+        set_usage_counters as set_policy_usage_counters,
+    )
+except ModuleNotFoundError:
+    from services.policy_service import (
+        get_usage_counters as get_policy_usage_counters,
+        has_feature_for_plan,
+        set_usage_counters as set_policy_usage_counters,
+    )
+try:
+    from python.services.insights_state_service import get_state_value, set_state_value
+except ModuleNotFoundError:
+    from services.insights_state_service import get_state_value, set_state_value
 try:
     from python.analysis.data_loader import load_from_csv
     from python.analysis.validation import DataValidationError, validate_frames
@@ -106,6 +122,22 @@ except ModuleNotFoundError:
         parse_webhook_allowed_hosts,
         validate_webhook_target_url,
     )
+try:
+    from app.ui.navigation import (
+        PAGE_GROUP_ORDER,
+        build_available_pages,
+        build_grouped_pages,
+        required_feature_for_page,
+    )
+    from app.ui.layout import render_global_context_bar, render_page_scaffold
+except ModuleNotFoundError:
+    from ui.navigation import (
+        PAGE_GROUP_ORDER,
+        build_available_pages,
+        build_grouped_pages,
+        required_feature_for_page,
+    )
+    from ui.layout import render_global_context_bar, render_page_scaffold
 
 load_dotenv()
 
@@ -114,6 +146,12 @@ RAW_DIR = Path(os.getenv("RAW_DATA_DIR", PROJECT_ROOT / "data" / "raw"))
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 APP_DATA_SOURCE = os.getenv("DATA_SOURCE", "csv").strip().lower()
 APP_VALIDATION_MODE = os.getenv("VALIDATION_MODE", "warn").strip().lower()
+APP_PIPELINE_SERVICE_URL = os.getenv("APP_PIPELINE_SERVICE_URL", "").strip()
+APP_PIPELINE_SERVICE_TIMEOUT_SECONDS = int(os.getenv("APP_PIPELINE_SERVICE_TIMEOUT_SECONDS", "30").strip() or 30)
+APP_POLICY_SERVICE_URL = os.getenv("APP_POLICY_SERVICE_URL", "").strip()
+APP_POLICY_SERVICE_TIMEOUT_SECONDS = int(os.getenv("APP_POLICY_SERVICE_TIMEOUT_SECONDS", "10").strip() or 10)
+APP_INSIGHTS_SERVICE_URL = os.getenv("APP_INSIGHTS_SERVICE_URL", "").strip()
+APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS = int(os.getenv("APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS", "10").strip() or 10)
 APP_AUTO_RUN_PIPELINE_ON_START = os.getenv("APP_AUTO_RUN_PIPELINE_ON_START", "1").strip().lower() in {"1", "true", "yes", "y"}
 APP_ALLOW_PROXY_SPEND = os.getenv("APP_ALLOW_PROXY_SPEND", "0").strip().lower() in {"1", "true", "yes", "y"}
 APP_DEFAULT_PLAN = normalize_plan_slug(os.getenv("APP_PLAN", "starter"))
@@ -134,6 +172,8 @@ APP_FORECAST_PERIOD_DAYS = int(os.getenv("APP_FORECAST_PERIOD_DAYS", "90").strip
 APP_AUTOPILOT_MAX_ACTIONS = int(os.getenv("APP_AUTOPILOT_MAX_ACTIONS", "8").strip() or 8)
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
+APP_POLICY_STATE_FILE = Path(os.getenv("APP_POLICY_STATE_FILE", PROCESSED_DIR / "policy_state.json"))
+APP_INSIGHTS_STATE_FILE = Path(os.getenv("APP_INSIGHTS_STATE_FILE", PROCESSED_DIR / "insights_state.json"))
 
 REQUIRED_OUTPUTS = [
     "kpi_overview",
@@ -144,27 +184,6 @@ REQUIRED_OUTPUTS = [
     "data_quality",
     "anomaly_report",
 ]
-PAGE_FEATURE_REQUIREMENTS = {
-    "Cohort Retention & LTV": "advanced_analytics",
-    "Customer Profitability": "advanced_analytics",
-    "Anomaly Alerts": "alert_actions",
-    "Budget Planner": "scenario_planner",
-    "Scheduled Reports": "scheduled_reports",
-    "Connectors & Sync": "connector_health",
-    "What Changed": "what_changed_diagnostics",
-    "Attribution Deep Dive": "attribution_depth",
-    "Scenario Optimizer": "scenario_optimizer",
-    "White Label Studio": "white_label_controls",
-    "Security Center": "security_center",
-    "Enterprise Controls": "enterprise_controls",
-    "Partner Hub": "partner_hub",
-    "Growth Copilot": "ai_growth_copilot",
-    "Experiment Studio": "growth_experiments",
-    "Playbook Automation": "playbook_automation",
-    "ROI Forecast": "roi_forecasting",
-    "Goal Tracker": "goal_tracker",
-    "Autopilot Queue": "autopilot_queue",
-}
 
 CANONICAL_RAW_FILES = {
     "sessions": "raw_sessions.csv",
@@ -186,36 +205,38 @@ PARTNER_PIPELINE_STATE_KEY = "partner_pipeline"
 EXPERIMENTS_STATE_KEY = "growth_experiments"
 PLAYBOOKS_STATE_KEY = "activation_playbooks"
 GOAL_TARGETS_STATE_KEY = "goal_targets"
-AUTOPILOT_QUEUE_STATE_KEY = "autopilot_queue_items"
+AUTOPILOT_QUEUE_STATE_KEY = "autopilot_queue"
 
-CORE_PAGES = [
-    "No-Code Upload Center",
-    "Executive Overview",
-    "Channel Performance",
-    "Data Quality",
-    "Billing & Plan",
-]
-ADVANCED_PAGES = [
-    "Connectors & Sync",
-    "What Changed",
-    "Security Center",
-    "Enterprise Controls",
-    "Partner Hub",
-    "Growth Copilot",
-    "Experiment Studio",
-    "Playbook Automation",
-    "ROI Forecast",
-    "Goal Tracker",
-    "Autopilot Queue",
-    "Attribution Deep Dive",
-    "Scenario Optimizer",
-    "White Label Studio",
-    "Cohort Retention & LTV",
-    "Customer Profitability",
-    "Anomaly Alerts",
-    "Budget Planner",
-    "Scheduled Reports",
-]
+
+def _get_service_backed_state(state_key: str, default_value):
+    try:
+        value = get_state_value(
+            state_key=state_key,
+            default_value=default_value,
+            state_file=APP_INSIGHTS_STATE_FILE,
+            service_url=APP_INSIGHTS_SERVICE_URL,
+            timeout_seconds=APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        value = st.session_state.get(state_key, default_value)
+    if value is None:
+        value = default_value
+    st.session_state[state_key] = value
+    return value
+
+
+def _set_service_backed_state(state_key: str, value) -> None:
+    st.session_state[state_key] = value
+    try:
+        set_state_value(
+            state_key=state_key,
+            value=value,
+            state_file=APP_INSIGHTS_STATE_FILE,
+            service_url=APP_INSIGHTS_SERVICE_URL,
+            timeout_seconds=APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        pass
 
 
 def _mark_user_uploaded_data() -> None:
@@ -245,32 +266,60 @@ def _current_plan():
 
 
 def _has_entitlement(feature: str) -> bool:
-    return has_feature(_get_active_plan_slug(), feature)
+    return has_feature_for_plan(
+        plan_slug=_get_active_plan_slug(),
+        feature=feature,
+        service_url=APP_POLICY_SERVICE_URL,
+        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+    )
+
+
+def _default_usage_counters() -> dict[str, int]:
+    return {
+        "report_exports": 0,
+        "scheduled_reports_created": 0,
+        "pipeline_runs": 0,
+        "connector_sync_runs": 0,
+        "alerts_acknowledged": 0,
+        "alert_dispatches": 0,
+        "ai_insights_generated": 0,
+        "experiments_logged": 0,
+        "playbooks_created": 0,
+        "forecasts_generated": 0,
+        "goal_refreshes": 0,
+        "autopilot_actions_generated": 0,
+    }
 
 
 def _get_usage_counters() -> dict[str, int]:
-    if USAGE_COUNTERS_STATE_KEY not in st.session_state:
-        st.session_state[USAGE_COUNTERS_STATE_KEY] = {
-            "report_exports": 0,
-            "scheduled_reports_created": 0,
-            "pipeline_runs": 0,
-            "connector_sync_runs": 0,
-            "alerts_acknowledged": 0,
-            "alert_dispatches": 0,
-            "ai_insights_generated": 0,
-            "experiments_logged": 0,
-            "playbooks_created": 0,
-            "forecasts_generated": 0,
-            "goal_refreshes": 0,
-            "autopilot_actions_generated": 0,
-        }
-    return st.session_state[USAGE_COUNTERS_STATE_KEY]
+    default_counters = _default_usage_counters()
+    counters = get_policy_usage_counters(
+        default_counters=default_counters,
+        state_file=APP_POLICY_STATE_FILE,
+        service_url=APP_POLICY_SERVICE_URL,
+        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+    )
+    normalized = {key: int(counters.get(key, default_value)) for key, default_value in default_counters.items()}
+    st.session_state[USAGE_COUNTERS_STATE_KEY] = normalized
+    return normalized
+
+
+def _set_usage_counters(counters: dict[str, int]) -> None:
+    default_counters = _default_usage_counters()
+    normalized = {key: int(counters.get(key, default_value)) for key, default_value in default_counters.items()}
+    set_policy_usage_counters(
+        counters=normalized,
+        state_file=APP_POLICY_STATE_FILE,
+        service_url=APP_POLICY_SERVICE_URL,
+        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+    )
+    st.session_state[USAGE_COUNTERS_STATE_KEY] = normalized
 
 
 def _increment_usage_counter(counter_name: str, amount: int = 1) -> None:
     counters = _get_usage_counters()
     counters[counter_name] = int(counters.get(counter_name, 0)) + int(amount)
-    st.session_state[USAGE_COUNTERS_STATE_KEY] = counters
+    _set_usage_counters(counters)
 
 def _get_audit_events() -> list[dict[str, str]]:
     if AUDIT_LOG_STATE_KEY not in st.session_state:
@@ -339,21 +388,21 @@ def _set_partner_pipeline(pipeline: list[dict[str, str | float]]) -> None:
     st.session_state[PARTNER_PIPELINE_STATE_KEY] = pipeline
 
 def _get_growth_experiments() -> list[dict[str, str | float]]:
-    if EXPERIMENTS_STATE_KEY not in st.session_state:
-        st.session_state[EXPERIMENTS_STATE_KEY] = []
-    return st.session_state[EXPERIMENTS_STATE_KEY]
+    value = _get_service_backed_state(EXPERIMENTS_STATE_KEY, [])
+    return value if isinstance(value, list) else []
 
 
 def _set_growth_experiments(experiments: list[dict[str, str | float]]) -> None:
-    st.session_state[EXPERIMENTS_STATE_KEY] = experiments
+    _set_service_backed_state(EXPERIMENTS_STATE_KEY, experiments)
+
 def _get_activation_playbooks() -> list[dict[str, str | float | int]]:
-    if PLAYBOOKS_STATE_KEY not in st.session_state:
-        st.session_state[PLAYBOOKS_STATE_KEY] = []
-    return st.session_state[PLAYBOOKS_STATE_KEY]
+    value = _get_service_backed_state(PLAYBOOKS_STATE_KEY, [])
+    return value if isinstance(value, list) else []
 
 
 def _set_activation_playbooks(playbooks: list[dict[str, str | float | int]]) -> None:
-    st.session_state[PLAYBOOKS_STATE_KEY] = playbooks
+    _set_service_backed_state(PLAYBOOKS_STATE_KEY, playbooks)
+
 def _default_goal_targets() -> dict[str, float]:
     return {
         "avg_cac": 80.0,
@@ -364,9 +413,9 @@ def _default_goal_targets() -> dict[str, float]:
 
 
 def _get_goal_targets() -> dict[str, float]:
-    if GOAL_TARGETS_STATE_KEY not in st.session_state:
-        st.session_state[GOAL_TARGETS_STATE_KEY] = _default_goal_targets()
-    raw = st.session_state[GOAL_TARGETS_STATE_KEY]
+    raw = _get_service_backed_state(GOAL_TARGETS_STATE_KEY, _default_goal_targets())
+    if not isinstance(raw, dict):
+        raw = _default_goal_targets()
     return {
         "avg_cac": float(raw.get("avg_cac", 80.0)),
         "avg_ltv_cac_ratio": float(raw.get("avg_ltv_cac_ratio", 2.5)),
@@ -376,28 +425,26 @@ def _get_goal_targets() -> dict[str, float]:
 
 
 def _set_goal_targets(targets: dict[str, float]) -> None:
-    st.session_state[GOAL_TARGETS_STATE_KEY] = {
+    _set_service_backed_state(GOAL_TARGETS_STATE_KEY, {
         "avg_cac": float(targets.get("avg_cac", 80.0)),
         "avg_ltv_cac_ratio": float(targets.get("avg_ltv_cac_ratio", 2.5)),
         "month1_retention": float(targets.get("month1_retention", 0.35)),
         "active_error_alerts": float(targets.get("active_error_alerts", 0.0)),
-    }
+    })
 
 
 def _get_autopilot_queue() -> list[dict[str, str | float]]:
-    if AUTOPILOT_QUEUE_STATE_KEY not in st.session_state:
-        st.session_state[AUTOPILOT_QUEUE_STATE_KEY] = []
-    return st.session_state[AUTOPILOT_QUEUE_STATE_KEY]
+    value = _get_service_backed_state(AUTOPILOT_QUEUE_STATE_KEY, [])
+    return value if isinstance(value, list) else []
 
 
 def _set_autopilot_queue(queue: list[dict[str, str | float]]) -> None:
-    st.session_state[AUTOPILOT_QUEUE_STATE_KEY] = queue
+    _set_service_backed_state(AUTOPILOT_QUEUE_STATE_KEY, queue)
 
 
 def _get_alert_destinations() -> list[dict[str, str]]:
-    if ALERT_DESTINATIONS_STATE_KEY not in st.session_state:
-        st.session_state[ALERT_DESTINATIONS_STATE_KEY] = []
-    return st.session_state[ALERT_DESTINATIONS_STATE_KEY]
+    value = _get_service_backed_state(ALERT_DESTINATIONS_STATE_KEY, [])
+    return value if isinstance(value, list) else []
 
 
 def _add_alert_destination(destination_type: str, target: str, label: str) -> None:
@@ -413,7 +460,7 @@ def _add_alert_destination(destination_type: str, target: str, label: str) -> No
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
-    st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+    _set_service_backed_state(ALERT_DESTINATIONS_STATE_KEY, destinations)
     _append_audit_event(
         action="add_alert_destination",
         outcome="success",
@@ -426,7 +473,7 @@ def _remove_alert_destination(index: int) -> None:
     destinations = _get_alert_destinations()
     if 0 <= index < len(destinations):
         removed = destinations.pop(index)
-        st.session_state[ALERT_DESTINATIONS_STATE_KEY] = destinations
+        _set_service_backed_state(ALERT_DESTINATIONS_STATE_KEY, destinations)
         _append_audit_event(
             action="remove_alert_destination",
             outcome="success",
@@ -505,9 +552,12 @@ def _dispatch_sample_alert_to_destinations() -> tuple[int, int, list[str]]:
 
 
 def _get_sync_jobs() -> list[dict[str, str]]:
-    if SYNC_JOBS_STATE_KEY not in st.session_state:
-        st.session_state[SYNC_JOBS_STATE_KEY] = []
-    return st.session_state[SYNC_JOBS_STATE_KEY]
+    value = _get_service_backed_state(SYNC_JOBS_STATE_KEY, [])
+    return value if isinstance(value, list) else []
+
+
+def _set_sync_jobs(jobs: list[dict[str, str]]) -> None:
+    _set_service_backed_state(SYNC_JOBS_STATE_KEY, jobs)
 
 
 def _upsert_default_sync_job() -> None:
@@ -522,7 +572,7 @@ def _upsert_default_sync_job() -> None:
             "status": "enabled",
         }
     )
-    st.session_state[SYNC_JOBS_STATE_KEY] = jobs
+    _set_sync_jobs(jobs)
 
 
 def _build_connector_health_table() -> pd.DataFrame:
@@ -571,13 +621,11 @@ def _load_previous_output(name: str) -> pd.DataFrame:
 
 
 def _available_pages_for_current_plan(show_advanced_pages: bool) -> list[str]:
-    pages = list(CORE_PAGES)
-    if show_advanced_pages:
-        for page in ADVANCED_PAGES:
-            required_feature = PAGE_FEATURE_REQUIREMENTS.get(page)
-            if required_feature is None or _has_entitlement(required_feature):
-                pages.append(page)
-    return pages
+    return build_available_pages(show_advanced_pages=show_advanced_pages, has_entitlement=_has_entitlement)
+
+
+def _grouped_pages_for_current_plan(show_advanced_pages: bool) -> dict[str, list[str]]:
+    return build_grouped_pages(show_advanced_pages=show_advanced_pages, has_entitlement=_has_entitlement)
 
 
 def _show_upgrade_cta(feature: str, reason: str) -> None:
@@ -811,11 +859,14 @@ def _ensure_processed_outputs() -> tuple[bool, str]:
     _backup_processed_outputs_before_run()
 
     try:
-        run_pipeline(
+        trigger_pipeline_job(
             data_source=APP_DATA_SOURCE,
             raw_data_dir=RAW_DIR,
             processed_data_dir=PROCESSED_DIR,
+            database_url=os.getenv("DATABASE_URL", "").strip() or None,
             validation_mode=APP_VALIDATION_MODE,
+            service_url=APP_PIPELINE_SERVICE_URL,
+            timeout_seconds=APP_PIPELINE_SERVICE_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         return False, f"Failed to build processed outputs on startup: {exc}"
@@ -832,11 +883,14 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
         mode = "warn"
     _backup_processed_outputs_before_run()
     try:
-        run_pipeline(
+        trigger_pipeline_job(
             data_source=APP_DATA_SOURCE,
             raw_data_dir=RAW_DIR,
             processed_data_dir=PROCESSED_DIR,
+            database_url=os.getenv("DATABASE_URL", "").strip() or None,
             validation_mode=mode,
+            service_url=APP_PIPELINE_SERVICE_URL,
+            timeout_seconds=APP_PIPELINE_SERVICE_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         _append_audit_event(
@@ -1692,14 +1746,14 @@ def show_connectors_and_sync(data: dict[str, pd.DataFrame] | None = None) -> Non
     sync_hour = st.number_input("Sync Hour (UTC)", min_value=0, max_value=23, value=max(min(APP_SYNC_DEFAULT_HOUR_UTC, 23), 0), step=1)
     sync_status = st.selectbox("Sync Status", options=["enabled", "paused"], index=0)
     if st.button("Save Sync Job", use_container_width=True):
-        st.session_state[SYNC_JOBS_STATE_KEY] = [
+        _set_sync_jobs([
             {
                 "name": "Primary D2C Sync",
                 "frequency": str(sync_frequency),
                 "hour_utc": str(int(sync_hour)),
                 "status": str(sync_status),
             }
-        ]
+        ])
         _append_audit_event(
             action="save_sync_job",
             outcome="success",
@@ -2846,9 +2900,28 @@ def main() -> None:
         value=False,
         help="Enable diagnostics, security, enterprise, partner, and advanced analytics pages.",
     )
-    page_options = _available_pages_for_current_plan(show_advanced_pages)
-    page = st.sidebar.radio("Page", page_options)
+    grouped_page_options = _grouped_pages_for_current_plan(show_advanced_pages)
+    section_options = [section for section in PAGE_GROUP_ORDER if grouped_page_options.get(section)]
+    if not section_options:
+        st.error("No pages are available for this workspace/plan selection.")
+        return
+
+    section = st.sidebar.selectbox("Section", options=section_options, index=0, key="page_section_selector")
+    page_options = grouped_page_options.get(section, [])
+    if not page_options:
+        fallback_section = section_options[0]
+        section = fallback_section
+        page_options = grouped_page_options.get(fallback_section, [])
+    page = st.sidebar.radio("Page", page_options, key="page_selector")
     _render_no_code_sidebar_controls()
+    render_global_context_bar(
+        workspace_name=str(st.session_state.get("workspace_name", "Default Workspace")).strip(),
+        plan_name=_current_plan().display_name,
+        active_section=section,
+        active_page=page,
+        advanced_mode_enabled=show_advanced_pages,
+    )
+    render_page_scaffold(page_name=page, section_name=section)
 
     if page == "No-Code Upload Center":
         show_data_upload_center()
@@ -2870,7 +2943,7 @@ def main() -> None:
         return
 
     data = load_outputs()
-    required_feature = PAGE_FEATURE_REQUIREMENTS.get(page)
+    required_feature = required_feature_for_page(page)
     if required_feature and not _has_entitlement(required_feature):
         _show_upgrade_cta(
             feature=required_feature,

@@ -35,6 +35,35 @@ End-to-end analytics project for a D2C brand with:
 4. Launch dashboard:
    - `streamlit run app/main.py`
 
+### Optional: run pipeline in service mode
+- Start the service runtime:
+  - `python -m python.pipeline.run_pipeline_service --host 127.0.0.1 --port 8091`
+- Trigger a job through the service:
+  - `python -m python.pipeline.run_pipeline --data-source csv --service-url http://127.0.0.1:8091`
+- App integration:
+  - set `APP_PIPELINE_SERVICE_URL=http://127.0.0.1:8091`
+  - set `APP_PIPELINE_SERVICE_TIMEOUT_SECONDS=30` (optional)
+
+### Optional: run insights automation state in service mode
+- Start the state service runtime:
+  - `python -m python.pipeline.run_insights_service --host 127.0.0.1 --port 8092`
+- App integration:
+  - set `APP_INSIGHTS_SERVICE_URL=http://127.0.0.1:8092`
+  - set `APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS=10` (optional)
+  - set `APP_INSIGHTS_STATE_FILE=data/processed/insights_state.json` (local fallback path)
+
+### Optional: run entitlements and usage policy in service mode
+- Start the policy service runtime:
+  - `python -m python.pipeline.run_policy_service --host 127.0.0.1 --port 8093`
+- App integration:
+  - set `APP_POLICY_SERVICE_URL=http://127.0.0.1:8093`
+  - set `APP_POLICY_SERVICE_TIMEOUT_SECONDS=10` (optional)
+  - set `APP_POLICY_STATE_FILE=data/processed/policy_state.json` (local fallback path)
+
+### Service preflight check command
+- Validate service health endpoints before cutover or CI service-mode runs:
+  - `python -m python.pipeline.check_service_health --pipeline-url http://127.0.0.1:8091 --insights-url http://127.0.0.1:8092 --policy-url http://127.0.0.1:8093`
+
 ## Monetization-ready features (Phase 1)
 - Plan-aware entitlements in app (`Starter`, `Growth`, `Pro / Agency`, `Enterprise`)
 - Billing page with plan limits + usage counters
