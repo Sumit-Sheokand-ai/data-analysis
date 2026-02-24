@@ -141,9 +141,27 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "1" if default else "0")
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _safe_parse_json_object(raw_value: str) -> dict[str, object]:
+    cleaned = str(raw_value).strip()
+    if not cleaned:
+        return {}
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
 
 RAW_DIR = Path(os.getenv("RAW_DATA_DIR", PROJECT_ROOT / "data" / "raw"))
 PROCESSED_DIR = Path(os.getenv("PROCESSED_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 APP_DATA_SOURCE = os.getenv("DATA_SOURCE", "csv").strip().lower()
 APP_VALIDATION_MODE = os.getenv("VALIDATION_MODE", "warn").strip().lower()
 APP_PIPELINE_SERVICE_URL = os.getenv("APP_PIPELINE_SERVICE_URL", "").strip()
@@ -152,10 +170,10 @@ APP_POLICY_SERVICE_URL = os.getenv("APP_POLICY_SERVICE_URL", "").strip()
 APP_POLICY_SERVICE_TIMEOUT_SECONDS = int(os.getenv("APP_POLICY_SERVICE_TIMEOUT_SECONDS", "10").strip() or 10)
 APP_INSIGHTS_SERVICE_URL = os.getenv("APP_INSIGHTS_SERVICE_URL", "").strip()
 APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS = int(os.getenv("APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS", "10").strip() or 10)
-APP_AUTO_RUN_PIPELINE_ON_START = os.getenv("APP_AUTO_RUN_PIPELINE_ON_START", "1").strip().lower() in {"1", "true", "yes", "y"}
-APP_ALLOW_PROXY_SPEND = os.getenv("APP_ALLOW_PROXY_SPEND", "0").strip().lower() in {"1", "true", "yes", "y"}
+APP_AUTO_RUN_PIPELINE_ON_START = _env_flag("APP_AUTO_RUN_PIPELINE_ON_START", default=True)
+APP_ALLOW_PROXY_SPEND = _env_flag("APP_ALLOW_PROXY_SPEND", default=False)
 APP_DEFAULT_PLAN = normalize_plan_slug(os.getenv("APP_PLAN", "starter"))
-APP_ALLOW_PLAN_SWITCH = os.getenv("APP_ALLOW_PLAN_SWITCH", "1").strip().lower() in {"1", "true", "yes", "y"}
+APP_ALLOW_PLAN_SWITCH = _env_flag("APP_ALLOW_PLAN_SWITCH", default=True)
 APP_STRIPE_CHECKOUT_URL = os.getenv("APP_STRIPE_CHECKOUT_URL", "").strip()
 APP_STRIPE_PORTAL_URL = os.getenv("APP_STRIPE_PORTAL_URL", "").strip()
 APP_CONTACT_SALES_URL = os.getenv("APP_CONTACT_SALES_URL", "").strip()
@@ -164,12 +182,21 @@ APP_SYNC_DEFAULT_FREQUENCY = os.getenv("APP_SYNC_DEFAULT_FREQUENCY", "daily").st
 APP_SYNC_DEFAULT_HOUR_UTC = int(os.getenv("APP_SYNC_DEFAULT_HOUR_UTC", "2").strip() or 2)
 APP_WEBHOOK_TIMEOUT_SECONDS = int(os.getenv("APP_WEBHOOK_TIMEOUT_SECONDS", "10").strip() or 10)
 APP_WEBHOOK_ALLOWED_HOSTS = parse_webhook_allowed_hosts(os.getenv("APP_WEBHOOK_ALLOWED_HOSTS", ""))
-APP_ENFORCE_HTTPS_WEBHOOKS = os.getenv("APP_ENFORCE_HTTPS_WEBHOOKS", "1").strip().lower() in {"1", "true", "yes", "y"}
+APP_ENFORCE_HTTPS_WEBHOOKS = _env_flag("APP_ENFORCE_HTTPS_WEBHOOKS", default=True)
 APP_WEBHOOK_SIGNING_SECRET = os.getenv("APP_WEBHOOK_SIGNING_SECRET", "").strip()
 APP_PARTNER_REFERRAL_URL = os.getenv("APP_PARTNER_REFERRAL_URL", "").strip()
 APP_COPILOT_MAX_RECOMMENDATIONS = int(os.getenv("APP_COPILOT_MAX_RECOMMENDATIONS", "6").strip() or 6)
 APP_FORECAST_PERIOD_DAYS = int(os.getenv("APP_FORECAST_PERIOD_DAYS", "90").strip() or 90)
 APP_AUTOPILOT_MAX_ACTIONS = int(os.getenv("APP_AUTOPILOT_MAX_ACTIONS", "8").strip() or 8)
+APP_REQUIRE_AUTH = _env_flag("APP_REQUIRE_AUTH", default=APP_ENV in {"production", "prod"})
+APP_AUTH_MODE = os.getenv("APP_AUTH_MODE", "basic" if APP_REQUIRE_AUTH else "disabled").strip().lower()
+APP_AUTH_DEFAULT_WORKSPACE = os.getenv("APP_AUTH_DEFAULT_WORKSPACE", "default").strip().lower() or "default"
+APP_AUTH_DEFAULT_ROLE = os.getenv("APP_AUTH_DEFAULT_ROLE", "viewer").strip().lower() or "viewer"
+APP_AUTH_BASIC_USERS_JSON = os.getenv("APP_AUTH_BASIC_USERS_JSON", "").strip()
+APP_WORKSPACE_PLAN_MAP_JSON = os.getenv("APP_WORKSPACE_PLAN_MAP_JSON", "").strip()
+APP_SERVICE_AUTH_TOKEN = os.getenv("APP_SERVICE_AUTH_TOKEN", "").strip()
+APP_DISABLE_LOCAL_STATE_FALLBACK = _env_flag("APP_DISABLE_LOCAL_STATE_FALLBACK", default=APP_ENV in {"production", "prod"})
+APP_DISABLE_LOCAL_PIPELINE_FALLBACK = _env_flag("APP_DISABLE_LOCAL_PIPELINE_FALLBACK", default=APP_ENV in {"production", "prod"})
 RAW_MARKETING_SPEND_PATH = RAW_DIR / "raw_marketing_spend.csv"
 PREVIOUS_OUTPUTS_DIR = PROCESSED_DIR / "previous"
 APP_POLICY_STATE_FILE = Path(os.getenv("APP_POLICY_STATE_FILE", PROCESSED_DIR / "policy_state.json"))
@@ -206,9 +233,200 @@ EXPERIMENTS_STATE_KEY = "growth_experiments"
 PLAYBOOKS_STATE_KEY = "activation_playbooks"
 GOAL_TARGETS_STATE_KEY = "goal_targets"
 AUTOPILOT_QUEUE_STATE_KEY = "autopilot_queue"
+AUTH_CONTEXT_STATE_KEY = "authenticated_user_context"
+
+
+def _normalize_workspace_id(value: str) -> str:
+    cleaned = str(value).strip().lower()
+    return cleaned or APP_AUTH_DEFAULT_WORKSPACE
+
+
+def _normalize_role(value: str) -> str:
+    cleaned = str(value).strip().lower()
+    return cleaned or APP_AUTH_DEFAULT_ROLE
+
+
+def _workspace_plan_overrides() -> dict[str, str]:
+    parsed = _safe_parse_json_object(APP_WORKSPACE_PLAN_MAP_JSON)
+    overrides: dict[str, str] = {}
+    for workspace_key, plan_slug in parsed.items():
+        workspace_id = _normalize_workspace_id(str(workspace_key))
+        normalized_plan = normalize_plan_slug(str(plan_slug))
+        overrides[workspace_id] = normalized_plan
+    return overrides
+
+
+APP_WORKSPACE_PLAN_OVERRIDES = _workspace_plan_overrides()
+
+
+def _workspace_plan_slug(workspace_id: str, preferred_plan_slug: str = "") -> str:
+    if str(preferred_plan_slug).strip():
+        return normalize_plan_slug(str(preferred_plan_slug))
+    normalized_workspace = _normalize_workspace_id(workspace_id)
+    mapped_plan = APP_WORKSPACE_PLAN_OVERRIDES.get(normalized_workspace)
+    if mapped_plan:
+        return normalize_plan_slug(mapped_plan)
+    return APP_DEFAULT_PLAN
+
+
+def _basic_auth_users() -> dict[str, dict[str, str]]:
+    parsed = _safe_parse_json_object(APP_AUTH_BASIC_USERS_JSON)
+    users: dict[str, dict[str, str]] = {}
+    for username, record in parsed.items():
+        if not isinstance(record, dict):
+            continue
+        normalized_username = str(username).strip().lower()
+        password = str(record.get("password", "")).strip()
+        if not normalized_username or not password:
+            continue
+        workspace_id = _normalize_workspace_id(str(record.get("workspace_id", APP_AUTH_DEFAULT_WORKSPACE)))
+        role = _normalize_role(str(record.get("role", APP_AUTH_DEFAULT_ROLE)))
+        plan_slug = _workspace_plan_slug(workspace_id, str(record.get("plan_slug", "")))
+        users[normalized_username] = {
+            "password": password,
+            "user_id": str(record.get("user_id", normalized_username)).strip().lower() or normalized_username,
+            "workspace_id": workspace_id,
+            "role": role,
+            "plan_slug": plan_slug,
+        }
+    return users
+
+
+APP_BASIC_AUTH_USERS = _basic_auth_users()
+
+
+def _anonymous_auth_context() -> dict[str, str | bool]:
+    workspace_id = _normalize_workspace_id(APP_AUTH_DEFAULT_WORKSPACE)
+    return {
+        "authenticated": False,
+        "user_id": "anonymous",
+        "workspace_id": workspace_id,
+        "role": APP_AUTH_DEFAULT_ROLE,
+        "plan_slug": _workspace_plan_slug(workspace_id),
+    }
+
+
+def _get_auth_context() -> dict[str, str | bool]:
+    if APP_AUTH_MODE == "disabled":
+        workspace_id = _normalize_workspace_id(st.session_state.get("workspace_name", APP_AUTH_DEFAULT_WORKSPACE))
+        return {
+            "authenticated": False,
+            "user_id": "local-user",
+            "workspace_id": workspace_id,
+            "role": APP_AUTH_DEFAULT_ROLE,
+            "plan_slug": _workspace_plan_slug(workspace_id),
+        }
+
+    raw_context = st.session_state.get(AUTH_CONTEXT_STATE_KEY, {})
+    if not isinstance(raw_context, dict) or not bool(raw_context.get("authenticated", False)):
+        return _anonymous_auth_context()
+
+    workspace_id = _normalize_workspace_id(str(raw_context.get("workspace_id", APP_AUTH_DEFAULT_WORKSPACE)))
+    return {
+        "authenticated": True,
+        "user_id": str(raw_context.get("user_id", "anonymous")).strip().lower() or "anonymous",
+        "workspace_id": workspace_id,
+        "role": _normalize_role(str(raw_context.get("role", APP_AUTH_DEFAULT_ROLE))),
+        "plan_slug": _workspace_plan_slug(workspace_id, str(raw_context.get("plan_slug", ""))),
+    }
+
+
+def _set_authenticated_user_context(
+    *,
+    user_id: str,
+    workspace_id: str,
+    role: str,
+    plan_slug: str,
+) -> None:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    st.session_state[AUTH_CONTEXT_STATE_KEY] = {
+        "authenticated": True,
+        "user_id": str(user_id).strip().lower(),
+        "workspace_id": normalized_workspace_id,
+        "role": _normalize_role(role),
+        "plan_slug": _workspace_plan_slug(normalized_workspace_id, plan_slug),
+    }
+
+
+def _clear_authenticated_user_context() -> None:
+    st.session_state.pop(AUTH_CONTEXT_STATE_KEY, None)
+
+
+def _render_auth_gate() -> bool:
+    if not APP_REQUIRE_AUTH:
+        return True
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        return True
+    st.warning("Authentication is required to access this app.")
+    if APP_AUTH_MODE != "basic":
+        st.error(
+            "No interactive auth mode is configured. "
+            "Set `APP_AUTH_MODE=basic` and `APP_AUTH_BASIC_USERS_JSON` (or configure your hosted auth adapter)."
+        )
+        return False
+
+    with st.form("basic_auth_login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Sign in", use_container_width=True)
+    if submit:
+        account = APP_BASIC_AUTH_USERS.get(str(username).strip().lower())
+        if account is None or str(password) != str(account.get("password", "")):
+            st.error("Invalid username or password.")
+            return False
+        _set_authenticated_user_context(
+            user_id=str(account.get("user_id", "anonymous")),
+            workspace_id=str(account.get("workspace_id", APP_AUTH_DEFAULT_WORKSPACE)),
+            role=str(account.get("role", APP_AUTH_DEFAULT_ROLE)),
+            plan_slug=str(account.get("plan_slug", APP_DEFAULT_PLAN)),
+        )
+        st.rerun()
+    return False
+
+
+def _render_account_sidebar() -> None:
+    auth_context = _get_auth_context()
+    if not bool(auth_context.get("authenticated", False)):
+        return
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Account")
+    st.sidebar.caption(f"User: `{auth_context['user_id']}`")
+    st.sidebar.caption(f"Role: `{auth_context['role']}`")
+    if st.sidebar.button("Sign out", use_container_width=True):
+        _clear_authenticated_user_context()
+        st.rerun()
+
+
+def _current_workspace_id() -> str:
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        workspace_id = _normalize_workspace_id(str(auth_context.get("workspace_id", APP_AUTH_DEFAULT_WORKSPACE)))
+    else:
+        workspace_id = _normalize_workspace_id(str(st.session_state.get("workspace_name", APP_AUTH_DEFAULT_WORKSPACE)))
+    st.session_state["workspace_name"] = workspace_id
+    return workspace_id
+
+
+def _current_user_id() -> str:
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        return str(auth_context.get("user_id", "anonymous")).strip().lower() or "anonymous"
+    return "anonymous"
+
+
+def _current_user_role() -> str:
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        return _normalize_role(str(auth_context.get("role", APP_AUTH_DEFAULT_ROLE)))
+    return APP_AUTH_DEFAULT_ROLE
 
 
 def _get_service_backed_state(state_key: str, default_value):
+    if APP_DISABLE_LOCAL_STATE_FALLBACK and not APP_INSIGHTS_SERVICE_URL:
+        raise RuntimeError(
+            "APP_INSIGHTS_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
+        )
     try:
         value = get_state_value(
             state_key=state_key,
@@ -216,8 +434,14 @@ def _get_service_backed_state(state_key: str, default_value):
             state_file=APP_INSIGHTS_STATE_FILE,
             service_url=APP_INSIGHTS_SERVICE_URL,
             timeout_seconds=APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
         )
     except Exception:
+        if APP_DISABLE_LOCAL_STATE_FALLBACK:
+            raise
         value = st.session_state.get(state_key, default_value)
     if value is None:
         value = default_value
@@ -227,6 +451,10 @@ def _get_service_backed_state(state_key: str, default_value):
 
 def _set_service_backed_state(state_key: str, value) -> None:
     st.session_state[state_key] = value
+    if APP_DISABLE_LOCAL_STATE_FALLBACK and not APP_INSIGHTS_SERVICE_URL:
+        raise RuntimeError(
+            "APP_INSIGHTS_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
+        )
     try:
         set_state_value(
             state_key=state_key,
@@ -234,9 +462,14 @@ def _set_service_backed_state(state_key: str, value) -> None:
             state_file=APP_INSIGHTS_STATE_FILE,
             service_url=APP_INSIGHTS_SERVICE_URL,
             timeout_seconds=APP_INSIGHTS_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
         )
     except Exception:
-        pass
+        if APP_DISABLE_LOCAL_STATE_FALLBACK:
+            raise
 
 
 def _mark_user_uploaded_data() -> None:
@@ -252,6 +485,12 @@ def _has_user_uploaded_data() -> bool:
 
 
 def _get_active_plan_slug() -> str:
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        workspace_id = _normalize_workspace_id(str(auth_context.get("workspace_id", APP_AUTH_DEFAULT_WORKSPACE)))
+        fixed_plan = _workspace_plan_slug(workspace_id, str(auth_context.get("plan_slug", "")))
+        st.session_state[ACTIVE_PLAN_STATE_KEY] = fixed_plan
+        return fixed_plan
     if ACTIVE_PLAN_STATE_KEY not in st.session_state:
         st.session_state[ACTIVE_PLAN_STATE_KEY] = APP_DEFAULT_PLAN
     return normalize_plan_slug(st.session_state[ACTIVE_PLAN_STATE_KEY])
@@ -271,6 +510,10 @@ def _has_entitlement(feature: str) -> bool:
         feature=feature,
         service_url=APP_POLICY_SERVICE_URL,
         timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+        workspace_id=_current_workspace_id(),
+        user_id=_current_user_id(),
+        user_role=_current_user_role(),
+        service_token=APP_SERVICE_AUTH_TOKEN,
     )
 
 
@@ -292,27 +535,52 @@ def _default_usage_counters() -> dict[str, int]:
 
 
 def _get_usage_counters() -> dict[str, int]:
+    if APP_DISABLE_LOCAL_STATE_FALLBACK and not APP_POLICY_SERVICE_URL:
+        raise RuntimeError(
+            "APP_POLICY_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
+        )
     default_counters = _default_usage_counters()
-    counters = get_policy_usage_counters(
-        default_counters=default_counters,
-        state_file=APP_POLICY_STATE_FILE,
-        service_url=APP_POLICY_SERVICE_URL,
-        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
-    )
+    try:
+        counters = get_policy_usage_counters(
+            default_counters=default_counters,
+            state_file=APP_POLICY_STATE_FILE,
+            service_url=APP_POLICY_SERVICE_URL,
+            timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
+        )
+    except Exception:
+        if APP_DISABLE_LOCAL_STATE_FALLBACK:
+            raise
+        counters = st.session_state.get(USAGE_COUNTERS_STATE_KEY, default_counters)
     normalized = {key: int(counters.get(key, default_value)) for key, default_value in default_counters.items()}
     st.session_state[USAGE_COUNTERS_STATE_KEY] = normalized
     return normalized
 
 
 def _set_usage_counters(counters: dict[str, int]) -> None:
+    if APP_DISABLE_LOCAL_STATE_FALLBACK and not APP_POLICY_SERVICE_URL:
+        raise RuntimeError(
+            "APP_POLICY_SERVICE_URL is required when APP_DISABLE_LOCAL_STATE_FALLBACK=1."
+        )
     default_counters = _default_usage_counters()
     normalized = {key: int(counters.get(key, default_value)) for key, default_value in default_counters.items()}
-    set_policy_usage_counters(
-        counters=normalized,
-        state_file=APP_POLICY_STATE_FILE,
-        service_url=APP_POLICY_SERVICE_URL,
-        timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
-    )
+    try:
+        set_policy_usage_counters(
+            counters=normalized,
+            state_file=APP_POLICY_STATE_FILE,
+            service_url=APP_POLICY_SERVICE_URL,
+            timeout_seconds=APP_POLICY_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
+        )
+    except Exception:
+        if APP_DISABLE_LOCAL_STATE_FALLBACK:
+            raise
     st.session_state[USAGE_COUNTERS_STATE_KEY] = normalized
 
 
@@ -335,7 +603,8 @@ def _append_audit_event(action: str, outcome: str, detail: str, category: str = 
             "category": str(category).strip().lower() or "app",
             "action": str(action).strip(),
             "outcome": str(outcome).strip().lower() or "success",
-            "workspace": str(st.session_state.get("workspace_name", "Default Workspace")).strip(),
+            "workspace": _current_workspace_id(),
+            "user_id": _current_user_id(),
             "detail": str(detail).strip(),
         }
     )
@@ -522,7 +791,7 @@ def _dispatch_sample_alert_to_destinations() -> tuple[int, int, list[str]]:
     payload = {
         "event": "anomaly_test_alert",
         "severity": "warn",
-        "detail": "Test dispatch from D2C analytics app",
+        "detail": "Test dispatch from Syntellia",
         "ts": datetime.now(timezone.utc).isoformat(),
     }
     for destination in destinations:
@@ -566,7 +835,7 @@ def _upsert_default_sync_job() -> None:
         return
     jobs.append(
         {
-            "name": "Primary D2C Sync",
+            "name": "Primary Syntellia Sync",
             "frequency": APP_SYNC_DEFAULT_FREQUENCY,
             "hour_utc": str(APP_SYNC_DEFAULT_HOUR_UTC),
             "status": "enabled",
@@ -647,16 +916,28 @@ def _show_upgrade_cta(feature: str, reason: str) -> None:
 def _render_workspace_and_plan_sidebar() -> None:
     st.sidebar.markdown("---")
     st.sidebar.subheader("Workspace & Plan")
-    workspace_name = st.sidebar.text_input(
-        "Workspace",
-        value=st.session_state.get("workspace_name", "Default Workspace"),
-        help="Name shown in exports and scheduled reports.",
-    )
-    st.session_state["workspace_name"] = workspace_name
+    auth_context = _get_auth_context()
+    if bool(auth_context.get("authenticated", False)):
+        workspace_name = _current_workspace_id()
+        st.sidebar.text_input(
+            "Workspace",
+            value=workspace_name,
+            disabled=True,
+            help="Workspace is bound to your authenticated account.",
+        )
+    else:
+        workspace_name = st.sidebar.text_input(
+            "Workspace",
+            value=st.session_state.get("workspace_name", APP_AUTH_DEFAULT_WORKSPACE),
+            help="Name shown in exports and scheduled reports.",
+        )
+        st.session_state["workspace_name"] = _normalize_workspace_id(workspace_name)
 
     current_slug = _get_active_plan_slug()
     current_plan = _current_plan()
-    if APP_ALLOW_PLAN_SWITCH:
+    if bool(auth_context.get("authenticated", False)):
+        st.sidebar.caption(f"Plan: **{current_plan.display_name}** (identity-bound)")
+    elif APP_ALLOW_PLAN_SWITCH:
         all_plan_slugs = list(list_plan_slugs())
         selected_slug = st.sidebar.selectbox(
             "Plan",
@@ -690,8 +971,8 @@ def _render_workspace_and_plan_sidebar() -> None:
 def _get_branding_config() -> dict[str, str]:
     if BRANDING_STATE_KEY not in st.session_state:
         st.session_state[BRANDING_STATE_KEY] = {
-            "brand_name": "D2C Marketing & Customer Profitability Analytics",
-            "subtitle": "CAC, LTV, retention, and profitability insights",
+            "brand_name": "Syntellia",
+            "subtitle": "Marketing profitability analytics",
             "primary_color": "#2f6df6",
             "logo_url": "",
         }
@@ -723,8 +1004,8 @@ def _apply_branding_styles() -> None:
 
 def _render_brand_header() -> None:
     config = _get_branding_config()
-    brand_name = config.get("brand_name", "").strip() or "D2C Marketing & Customer Profitability Analytics"
-    subtitle = config.get("subtitle", "").strip() or "CAC, LTV, retention, and profitability insights"
+    brand_name = config.get("brand_name", "").strip() or "Syntellia"
+    subtitle = config.get("subtitle", "").strip() or "Marketing profitability analytics"
     logo_url = config.get("logo_url", "").strip()
     if logo_url:
         st.image(logo_url, width=72)
@@ -856,6 +1137,11 @@ def _ensure_processed_outputs() -> tuple[bool, str]:
         return False, f"Unsupported DATA_SOURCE `{APP_DATA_SOURCE}`. Use `csv` or `postgres`."
     if APP_VALIDATION_MODE not in {"strict", "warn"}:
         return False, f"Unsupported VALIDATION_MODE `{APP_VALIDATION_MODE}`. Use `strict` or `warn`."
+    if APP_DISABLE_LOCAL_PIPELINE_FALLBACK and not APP_PIPELINE_SERVICE_URL:
+        return False, (
+            "APP_PIPELINE_SERVICE_URL is required when APP_DISABLE_LOCAL_PIPELINE_FALLBACK=1. "
+            "Local in-process pipeline execution is disabled."
+        )
     _backup_processed_outputs_before_run()
 
     try:
@@ -867,6 +1153,10 @@ def _ensure_processed_outputs() -> tuple[bool, str]:
             validation_mode=APP_VALIDATION_MODE,
             service_url=APP_PIPELINE_SERVICE_URL,
             timeout_seconds=APP_PIPELINE_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
         )
     except Exception as exc:
         return False, f"Failed to build processed outputs on startup: {exc}"
@@ -881,6 +1171,11 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
     mode = validation_mode.strip().lower()
     if mode not in {"strict", "warn"}:
         mode = "warn"
+    if APP_DISABLE_LOCAL_PIPELINE_FALLBACK and not APP_PIPELINE_SERVICE_URL:
+        return (
+            False,
+            "APP_PIPELINE_SERVICE_URL is required when APP_DISABLE_LOCAL_PIPELINE_FALLBACK=1.",
+        )
     _backup_processed_outputs_before_run()
     try:
         trigger_pipeline_job(
@@ -891,6 +1186,10 @@ def _run_pipeline_now(validation_mode: str) -> tuple[bool, str]:
             validation_mode=mode,
             service_url=APP_PIPELINE_SERVICE_URL,
             timeout_seconds=APP_PIPELINE_SERVICE_TIMEOUT_SECONDS,
+            workspace_id=_current_workspace_id(),
+            user_id=_current_user_id(),
+            user_role=_current_user_role(),
+            service_token=APP_SERVICE_AUTH_TOKEN,
         )
     except Exception as exc:
         _append_audit_event(
@@ -2015,8 +2314,8 @@ def show_white_label_studio(data: dict[str, pd.DataFrame] | None = None) -> None
         if st.button("Reset Branding", use_container_width=True):
             _set_branding_config(
                 {
-                    "brand_name": "D2C Marketing & Customer Profitability Analytics",
-                    "subtitle": "CAC, LTV, retention, and profitability insights",
+                    "brand_name": "Syntellia",
+                    "subtitle": "Marketing profitability analytics",
                     "primary_color": "#2f6df6",
                     "logo_url": "",
                 }
@@ -2891,9 +3190,12 @@ def show_anomaly_alerts(data: dict[str, pd.DataFrame]) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="D2C Profitability Analytics", layout="wide")
+    st.set_page_config(page_title="Syntellia", layout="wide")
     _apply_branding_styles()
     _render_brand_header()
+    if not _render_auth_gate():
+        return
+    _render_account_sidebar()
     _render_workspace_and_plan_sidebar()
     show_advanced_pages = st.sidebar.toggle(
         "Show advanced pages",
@@ -2915,7 +3217,7 @@ def main() -> None:
     page = st.sidebar.radio("Page", page_options, key="page_selector")
     _render_no_code_sidebar_controls()
     render_global_context_bar(
-        workspace_name=str(st.session_state.get("workspace_name", "Default Workspace")).strip(),
+        workspace_name=_current_workspace_id(),
         plan_name=_current_plan().display_name,
         active_section=section,
         active_page=page,

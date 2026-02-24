@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from python.analysis.pipeline import run_pipeline
+from python.services.service_auth import actor_from_headers, is_request_authorized, should_require_health_auth
 
 
 PipelineRunner = Callable[..., dict[str, Any]]
@@ -72,6 +73,19 @@ def _write_json(handler: BaseHTTPRequestHandler, status_code: int, payload: dict
     handler.wfile.write(body)
 
 
+def _authorize_request(
+    handler: BaseHTTPRequestHandler,
+    *,
+    health_endpoint: bool = False,
+) -> bool:
+    if health_endpoint and not should_require_health_auth():
+        return True
+    if is_request_authorized(handler.headers):
+        return True
+    _write_json(handler, 401, {"status": "error", "message": "Unauthorized"})
+    return False
+
+
 def create_pipeline_http_server(
     host: str = "127.0.0.1",
     port: int = 8091,
@@ -84,6 +98,8 @@ def create_pipeline_http_server(
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path == "/health":
+                if not _authorize_request(self, health_endpoint=True):
+                    return
                 _write_json(self, 200, {"status": "ok", "service": "analytics-pipeline-service"})
                 return
             _write_json(self, 404, {"status": "error", "message": "Not found"})
@@ -92,6 +108,8 @@ def create_pipeline_http_server(
             path = urlparse(self.path).path
             if path != "/jobs/run":
                 _write_json(self, 404, {"status": "error", "message": "Not found"})
+                return
+            if not _authorize_request(self):
                 return
             try:
                 payload = _parse_json_body(self)
@@ -102,6 +120,9 @@ def create_pipeline_http_server(
             except Exception as exc:
                 _write_json(self, 500, {"status": "error", "message": f"Pipeline execution failed: {exc}"})
                 return
+            actor = actor_from_headers(self.headers)
+            result["workspace_id"] = actor["workspace_id"]
+            result["requested_by"] = actor["user_id"]
             _write_json(self, 200, result)
 
     return ThreadingHTTPServer((host, int(port)), PipelineRequestHandler)

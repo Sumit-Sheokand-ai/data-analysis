@@ -4,6 +4,7 @@ import json
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from python.services.service_auth import build_service_headers
 
 
 def health_url_for_service(base_url: str) -> str:
@@ -15,9 +16,17 @@ def health_url_for_service(base_url: str) -> str:
     return f"{cleaned}/health"
 
 
-def check_service_health(base_url: str, timeout_seconds: int = 5) -> dict[str, Any]:
+def check_service_health(
+    base_url: str,
+    timeout_seconds: int = 5,
+    service_token: str = "",
+) -> dict[str, Any]:
     url = health_url_for_service(base_url)
-    request = urllib_request.Request(url=url, method="GET")
+    request = urllib_request.Request(
+        url=url,
+        headers=build_service_headers(service_token=service_token),
+        method="GET",
+    )
     try:
         with urllib_request.urlopen(request, timeout=max(int(timeout_seconds), 1)) as response:
             status_code = int(getattr(response, "status", 200))
@@ -56,6 +65,7 @@ def check_service_health(base_url: str, timeout_seconds: int = 5) -> dict[str, A
 def assert_services_healthy(
     service_urls: dict[str, str],
     timeout_seconds: int = 5,
+    service_token: str = "",
 ) -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
@@ -63,7 +73,11 @@ def assert_services_healthy(
         cleaned = str(url).strip()
         if not cleaned:
             continue
-        result = check_service_health(cleaned, timeout_seconds=timeout_seconds)
+        result = check_service_health(
+            cleaned,
+            timeout_seconds=timeout_seconds,
+            service_token=service_token,
+        )
         results[name] = result
         if not bool(result.get("ok", False)):
             failures.append(f"{name}: {result.get('message', 'unhealthy')}")

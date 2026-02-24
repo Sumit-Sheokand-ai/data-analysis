@@ -1,13 +1,17 @@
 services:
   - type: web
-    name: d2c-analytics-webapp
+    name: syntellia-webapp
     env: docker
     plan: free
     autoDeploy: true
     healthCheckPath: /
     envVars:
+      - key: APP_ENV
+        value: production
       - key: DATA_SOURCE
-        value: csv
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
       - key: RAW_DATA_DIR
         value: /opt/render/project/src/data/raw
       - key: PROCESSED_DATA_DIR
@@ -16,3 +20,25 @@ services:
         value: "1"
       - key: VALIDATION_MODE
         value: warn
+      - key: APP_REQUIRE_AUTH
+        value: "1"
+      - key: APP_AUTH_MODE
+        value: basic
+      - key: APP_AUTH_BASIC_USERS_JSON
+        sync: false
+      - key: APP_WORKSPACE_PLAN_MAP_JSON
+        sync: false
+      - key: APP_PIPELINE_SERVICE_URL
+        sync: false
+      - key: APP_INSIGHTS_SERVICE_URL
+        sync: false
+      - key: APP_POLICY_SERVICE_URL
+        sync: false
+      - key: APP_SERVICE_AUTH_TOKEN
+        sync: false
+      - key: APP_DISABLE_LOCAL_STATE_FALLBACK
+        value: "1"
+      - key: APP_DISABLE_LOCAL_PIPELINE_FALLBACK
+        value: "1"
+      - key: APP_PUBLIC_BASE_URL
+        value: https://syntellia.ca

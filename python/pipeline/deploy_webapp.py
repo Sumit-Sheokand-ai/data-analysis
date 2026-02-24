@@ -50,10 +50,10 @@ def docker_run(image: str, port: int) -> None:
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Deploy helper for D2C analytics web app.")
+    parser = argparse.ArgumentParser(description="Deploy helper for Syntellia web app.")
     parser.add_argument("--mode", choices=["local", "docker-build", "docker-run"], default="local")
     parser.add_argument("--port", type=int, default=8501)
-    parser.add_argument("--image", default="d2c-analytics-webapp:latest")
+    parser.add_argument("--image", default="syntellia-webapp:latest")
     parser.add_argument("--refresh-data", action="store_true", help="Run analytics pipeline before local app start.")
     parser.add_argument("--data-source", choices=["csv", "postgres"], default="csv")
     parser.add_argument("--validation-mode", choices=["strict", "warn"], default="warn")

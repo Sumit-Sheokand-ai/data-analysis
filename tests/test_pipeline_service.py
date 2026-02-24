@@ -49,6 +49,11 @@ def test_trigger_pipeline_job_calls_service_when_url_provided(monkeypatch, tmp_p
         captured["url"] = request.full_url
         captured["timeout"] = timeout
         captured["payload"] = json.loads(request.data.decode("utf-8"))
+        headers = {str(key).strip().lower(): str(value).strip() for key, value in request.header_items()}
+        captured["authorization"] = headers.get("authorization")
+        captured["workspace"] = headers.get("x-workspace-id")
+        captured["user_id"] = headers.get("x-user-id")
+        captured["user_role"] = headers.get("x-user-role")
         return FakeResponse({"status": "accepted", "job_id": "job-123"})
 
     monkeypatch.setattr("python.services.pipeline_service.urllib_request.urlopen", fake_urlopen)
@@ -60,6 +65,10 @@ def test_trigger_pipeline_job_calls_service_when_url_provided(monkeypatch, tmp_p
         database_url="postgresql://db",
         service_url="https://pipeline.internal",
         timeout_seconds=45,
+        workspace_id="acme",
+        user_id="analyst@acme",
+        user_role="analyst",
+        service_token="svc-token",
     )
     assert result["mode"] == "service"
     assert result["status"] == "accepted"
@@ -68,6 +77,10 @@ def test_trigger_pipeline_job_calls_service_when_url_provided(monkeypatch, tmp_p
     assert captured["timeout"] == 45
     assert captured["payload"]["data_source"] == "postgres"
     assert captured["payload"]["validation_mode"] == "strict"
+    assert captured["authorization"] == "Bearer svc-token"
+    assert captured["workspace"] == "acme"
+    assert captured["user_id"] == "analyst@acme"
+    assert captured["user_role"] == "analyst"
 
 
 def test_trigger_pipeline_job_raises_on_service_failure_status(monkeypatch, tmp_path: Path) -> None:

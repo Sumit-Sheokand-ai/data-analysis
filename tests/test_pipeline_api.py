@@ -73,6 +73,57 @@ def test_pipeline_http_server_supports_health_and_jobs_run(tmp_path: Path) -> No
         thread.join(timeout=2)
 
 
+def test_pipeline_http_server_rejects_unauthorized_calls_when_token_configured(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SERVICE_API_AUTH_TOKEN", "pipeline-token")
+    def fake_runner(**kwargs):
+        return {"kpi_overview": pd.DataFrame([{"metric": "orders", "value": 1}])}
+
+    server = create_pipeline_http_server(host="127.0.0.1", port=0, pipeline_runner=fake_runner)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        unauthorized_request = urllib_request.Request(
+            url=f"{base_url}/jobs/run",
+            data=json.dumps({"data_source": "csv"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib_request.urlopen(unauthorized_request, timeout=5)
+            assert False, "Expected HTTPError for unauthorized request"
+        except urllib_error.HTTPError as exc:
+            assert exc.code == 401
+
+        authorized_request = urllib_request.Request(
+            url=f"{base_url}/jobs/run",
+            data=json.dumps(
+                {
+                    "data_source": "csv",
+                    "raw_data_dir": str(tmp_path / "raw"),
+                    "processed_data_dir": str(tmp_path / "processed"),
+                    "validation_mode": "warn",
+                }
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer pipeline-token",
+                "X-Workspace-Id": "acme",
+                "X-User-Id": "alice",
+            },
+            method="POST",
+        )
+        with urllib_request.urlopen(authorized_request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        assert payload["status"] == "completed"
+        assert payload["workspace_id"] == "acme"
+        assert payload["requested_by"] == "alice"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_pipeline_http_server_returns_validation_errors_for_bad_payload() -> None:
     server = create_pipeline_http_server(host="127.0.0.1", port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

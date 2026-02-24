@@ -65,3 +65,28 @@ def test_assert_services_healthy_raises_on_unreachable_service() -> None:
     with pytest.raises(RuntimeError, match="pipeline"):
         assert_services_healthy({"pipeline": f"http://127.0.0.1:{bad_port}"}, timeout_seconds=1)
 
+
+def test_check_service_health_supports_authenticated_health_probes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SERVICE_API_AUTH_TOKEN", "health-token")
+    monkeypatch.setenv("SERVICE_HEALTH_REQUIRE_AUTH", "1")
+
+    def fake_runner(**kwargs):
+        return {"kpi_overview": pd.DataFrame([{"metric": "orders", "value": 1}])}
+
+    server = create_pipeline_http_server(host="127.0.0.1", port=0, pipeline_runner=fake_runner)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        unauthorized = check_service_health(base_url, timeout_seconds=5)
+        assert unauthorized["ok"] is False
+        assert int(unauthorized["status_code"]) == 401
+
+        authorized = check_service_health(base_url, timeout_seconds=5, service_token="health-token")
+        assert authorized["ok"] is True
+        assert int(authorized["status_code"]) == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+

@@ -1,5 +1,5 @@
-# D2C Multi-Channel Marketing & Customer Profitability Analytics
-End-to-end analytics project for a D2C brand with:
+# Syntellia
+End-to-end marketing profitability analytics web app with:
 - SQL-first cleaning/modeling (PostgreSQL scripts)
 - Python KPI analysis (CAC, retention, realized + predictive LTV)
 - Streamlit web app dashboard
@@ -35,6 +35,20 @@ End-to-end analytics project for a D2C brand with:
 4. Launch dashboard:
    - `streamlit run app/main.py`
 
+## Hosted authentication and tenant-aware mode
+For hosted/public deployments, enable auth and bind users to workspaces:
+- `APP_REQUIRE_AUTH=1`
+- `APP_AUTH_MODE=basic` (or replace with your managed auth adapter)
+- `APP_AUTH_BASIC_USERS_JSON='{"alice":{"password":"...","workspace_id":"acme","role":"admin","plan_slug":"growth"}}'`
+- `APP_WORKSPACE_PLAN_MAP_JSON='{"acme":"growth","globex":"pro"}'` (optional workspace-to-plan overrides)
+
+With auth enabled, workspace and plan are identity-bound in the app shell and service-backed state/usage is scoped by `workspace_id`.
+
+## Custom domain
+- Primary domain: `https://syntellia.ca`
+- Set `APP_PUBLIC_BASE_URL=https://syntellia.ca`
+- In Render, add `syntellia.ca` in **Settings → Custom Domains** and complete DNS/TLS verification.
+
 ### Optional: run pipeline in service mode
 - Start the service runtime:
   - `python -m python.pipeline.run_pipeline_service --host 127.0.0.1 --port 8091`
@@ -43,6 +57,9 @@ End-to-end analytics project for a D2C brand with:
 - App integration:
   - set `APP_PIPELINE_SERVICE_URL=http://127.0.0.1:8091`
   - set `APP_PIPELINE_SERVICE_TIMEOUT_SECONDS=30` (optional)
+  - set `APP_SERVICE_AUTH_TOKEN=<shared-service-token>`
+  - set `SERVICE_API_AUTH_TOKEN=<shared-service-token>` in service runtime environments
+  - optional: set `SERVICE_HEALTH_REQUIRE_AUTH=1` to protect `/health`
 
 ### Optional: run insights automation state in service mode
 - Start the state service runtime:
@@ -88,6 +105,10 @@ End-to-end analytics project for a D2C brand with:
 ### Optional environment variables for billing UX
 - `APP_PLAN` (default: `starter`)
 - `APP_ALLOW_PLAN_SWITCH` (default: `1`; set `0` to lock plan server-side)
+- `APP_REQUIRE_AUTH` (default: `0` in development; set `1` for hosted/public usage)
+- `APP_AUTH_MODE` (`disabled` or `basic`)
+- `APP_AUTH_BASIC_USERS_JSON` (basic login users with `password`, `workspace_id`, optional `role`, optional `plan_slug`)
+- `APP_WORKSPACE_PLAN_MAP_JSON` (optional workspace-to-plan map)
 - `APP_STRIPE_CHECKOUT_URL` (upgrade CTA link)
 - `APP_STRIPE_PORTAL_URL` (billing portal link)
 - `APP_CONTACT_SALES_URL` (enterprise/contact sales link)
@@ -102,6 +123,11 @@ End-to-end analytics project for a D2C brand with:
 - `APP_COPILOT_MAX_RECOMMENDATIONS` (max actions generated per Growth Copilot batch; default `6`)
 - `APP_FORECAST_PERIOD_DAYS` (default horizon for ROI Forecast in days; default `90`)
 - `APP_AUTOPILOT_MAX_ACTIONS` (max actions queued per Goal Tracker autopilot run; default `8`)
+- `APP_SERVICE_AUTH_TOKEN` (bearer token attached to app -> service calls)
+- `SERVICE_API_AUTH_TOKEN` (token required by service APIs when set)
+- `SERVICE_HEALTH_REQUIRE_AUTH` (default: `0`; set `1` to protect service `/health`)
+- `APP_DISABLE_LOCAL_STATE_FALLBACK` (set `1` in production to require service-backed state/policy paths)
+- `APP_DISABLE_LOCAL_PIPELINE_FALLBACK` (set `1` in production to require pipeline service)
 ## Real export connectors (Shopify + GA4)
 Map real platform exports into canonical raw tables:
 - `python -m python.pipeline.prepare_real_exports --shopify-orders path/to/shopify_orders.csv --ga4-sessions path/to/ga4_sessions.csv --output-dir data/raw --validation-mode strict`

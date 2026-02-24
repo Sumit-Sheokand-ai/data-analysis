@@ -39,6 +39,25 @@ def test_policy_service_local_usage_roundtrip(tmp_path: Path) -> None:
     assert persisted["pipeline_runs"] == 1
 
 
+def test_policy_service_usage_is_workspace_scoped(tmp_path: Path) -> None:
+    state_file = tmp_path / "policy_state.json"
+    defaults = {"report_exports": 0, "pipeline_runs": 0}
+    set_usage_counters(
+        counters={"report_exports": 2, "pipeline_runs": 1},
+        state_file=state_file,
+        workspace_id="workspace-a",
+    )
+    set_usage_counters(
+        counters={"report_exports": 9, "pipeline_runs": 4},
+        state_file=state_file,
+        workspace_id="workspace-b",
+    )
+    usage_a = get_usage_counters(default_counters=defaults, state_file=state_file, workspace_id="workspace-a")
+    usage_b = get_usage_counters(default_counters=defaults, state_file=state_file, workspace_id="workspace-b")
+    assert usage_a["report_exports"] == 2
+    assert usage_b["report_exports"] == 9
+
+
 def test_policy_service_http_mode_roundtrip(tmp_path: Path) -> None:
     state_file = tmp_path / "policy_state.json"
     server = create_policy_http_server(host="127.0.0.1", port=0, state_file=state_file)
@@ -72,6 +91,41 @@ def test_policy_service_http_mode_roundtrip(tmp_path: Path) -> None:
             service_url=service_url,
             timeout_seconds=5,
         )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_policy_api_requires_auth_when_token_configured(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SERVICE_API_AUTH_TOKEN", "policy-token")
+    server = create_policy_http_server(host="127.0.0.1", port=0, state_file=tmp_path / "policy_state.json")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        unauthorized_request = urllib_request.Request(url=f"{base_url}/usage", method="GET")
+        with pytest.raises(urllib_error.HTTPError) as exc_info:
+            urllib_request.urlopen(unauthorized_request, timeout=5)
+        assert exc_info.value.code == 401
+
+        set_usage_counters(
+            counters={"report_exports": 5, "pipeline_runs": 2},
+            state_file=tmp_path / "ignored.json",
+            service_url=base_url,
+            timeout_seconds=5,
+            workspace_id="secure-workspace",
+            service_token="policy-token",
+        )
+        usage = get_usage_counters(
+            default_counters={"report_exports": 0, "pipeline_runs": 0},
+            state_file=tmp_path / "ignored.json",
+            service_url=base_url,
+            timeout_seconds=5,
+            workspace_id="secure-workspace",
+            service_token="policy-token",
+        )
+        assert usage["report_exports"] == 5
     finally:
         server.shutdown()
         server.server_close()

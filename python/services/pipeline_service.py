@@ -7,17 +7,26 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from python.analysis.pipeline import run_pipeline
+from python.services.service_auth import build_service_headers
 
 
 def _service_endpoint(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/jobs/run"
 
 
-def _post_json(url: str, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    request_headers = {"Content-Type": "application/json"}
+    if headers:
+        request_headers.update(headers)
     request = urllib_request.Request(
         url=url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=request_headers,
         method="POST",
     )
     try:
@@ -49,6 +58,10 @@ def trigger_pipeline_job(
     database_url: str | None = None,
     service_url: str = "",
     timeout_seconds: int = 30,
+    workspace_id: str = "",
+    user_id: str = "",
+    user_role: str = "",
+    service_token: str = "",
 ) -> dict[str, Any]:
     cleaned_service_url = str(service_url).strip()
     if not cleaned_service_url:
@@ -72,7 +85,18 @@ def trigger_pipeline_job(
         "validation_mode": str(validation_mode).strip().lower(),
         "database_url": database_url or "",
     }
-    response = _post_json(_service_endpoint(cleaned_service_url), payload, timeout_seconds=timeout_seconds)
+    request_headers = build_service_headers(
+        service_token=service_token,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        user_role=user_role,
+    )
+    response = _post_json(
+        _service_endpoint(cleaned_service_url),
+        payload,
+        timeout_seconds=timeout_seconds,
+        headers=request_headers,
+    )
     status = str(response.get("status", "accepted")).strip().lower()
     if status in {"failed", "error"}:
         detail = str(response.get("message", "pipeline service reported failure")).strip()
