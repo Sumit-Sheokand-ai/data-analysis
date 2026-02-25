@@ -82,6 +82,8 @@ class WebAppConfig:
     default_plan: str
     workspace_plan_overrides: dict[str, str]
     basic_auth_users: dict[str, dict[str, str]]
+    cors_allowed_origins: list[str]
+    cors_allow_credentials: bool
     static_dir: Path
 
 
@@ -132,6 +134,37 @@ def _normalize_workspace_id(value: str) -> str:
 def _normalize_role(value: str) -> str:
     cleaned = str(value).strip().lower()
     return cleaned or "viewer"
+
+
+def _normalize_origin(value: str) -> str:
+    cleaned = str(value).strip()
+    if not cleaned:
+        return ""
+    return cleaned.rstrip("/")
+
+
+def _parse_cors_allowed_origins(raw_value: str, fallback_origin: str = "") -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw_value).split(","):
+        origin = _normalize_origin(item)
+        if not origin or origin in seen:
+            continue
+        seen.add(origin)
+        normalized.append(origin)
+    fallback = _normalize_origin(fallback_origin)
+    if fallback and fallback not in seen:
+        normalized.append(fallback)
+    return normalized
+
+
+def _is_allowed_origin(origin: str, allowed_origins: list[str]) -> bool:
+    normalized_origin = _normalize_origin(origin)
+    if not normalized_origin:
+        return False
+    if "*" in allowed_origins:
+        return True
+    return normalized_origin in allowed_origins
 
 
 def _workspace_plan_slug(
@@ -196,6 +229,7 @@ def _basic_auth_users(
 
 def load_webapp_config(project_root: Path | None = None) -> WebAppConfig:
     root = project_root or PROJECT_ROOT
+    public_base_url = _normalize_origin(os.getenv("APP_PUBLIC_BASE_URL", "").strip())
     default_workspace = _normalize_workspace_id(os.getenv("APP_AUTH_DEFAULT_WORKSPACE", "default"))
     default_role = _normalize_role(os.getenv("APP_AUTH_DEFAULT_ROLE", "viewer"))
     default_plan = normalize_plan_slug(os.getenv("APP_PLAN", "starter"))
@@ -206,6 +240,10 @@ def load_webapp_config(project_root: Path | None = None) -> WebAppConfig:
         default_role=default_role,
         default_plan=default_plan,
         workspace_plan_overrides=workspace_overrides,
+    )
+    cors_allowed_origins = _parse_cors_allowed_origins(
+        os.getenv("APP_CORS_ALLOWED_ORIGINS", "").strip(),
+        fallback_origin=public_base_url,
     )
     return WebAppConfig(
         app_env=os.getenv("APP_ENV", "development").strip().lower(),
@@ -229,6 +267,8 @@ def load_webapp_config(project_root: Path | None = None) -> WebAppConfig:
         default_plan=default_plan,
         workspace_plan_overrides=workspace_overrides,
         basic_auth_users=basic_users,
+        cors_allowed_origins=cors_allowed_origins,
+        cors_allow_credentials=_env_flag("APP_CORS_ALLOW_CREDENTIALS", default=True),
         static_dir=root,
     )
 
@@ -321,6 +361,27 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _cors_headers_for_handler(handler: BaseHTTPRequestHandler) -> dict[str, str]:
+    request_path = urlparse(str(getattr(handler, "path", ""))).path
+    if request_path != "/health" and not request_path.startswith("/api/"):
+        return {}
+    server_config = getattr(getattr(handler, "server", None), "webapp_config", None)
+    if not isinstance(server_config, WebAppConfig):
+        return {}
+    origin = _normalize_origin(str(handler.headers.get("Origin", "")))
+    if not _is_allowed_origin(origin, server_config.cors_allowed_origins):
+        return {}
+    headers = {
+        "Vary": "Origin",
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+    }
+    if server_config.cors_allow_credentials:
+        headers["Access-Control-Allow-Credentials"] = "true"
+    return headers
+
+
 def _write_json(
     handler: BaseHTTPRequestHandler,
     status_code: int,
@@ -332,8 +393,10 @@ def _write_json(
     handler.send_response(status_code)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
+    merged_headers: dict[str, str] = dict(_cors_headers_for_handler(handler))
     if extra_headers:
-        for key, value in extra_headers.items():
+        merged_headers.update(extra_headers)
+    for key, value in merged_headers.items():
             handler.send_header(key, value)
     handler.end_headers()
     handler.wfile.write(body)
@@ -712,6 +775,8 @@ def create_webapp_http_server(
             self.send_response(204)
             self.send_header("Allow", "GET,POST,OPTIONS")
             self.send_header("Content-Length", "0")
+            for key, value in _cors_headers_for_handler(self).items():
+                self.send_header(key, value)
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
@@ -912,5 +977,6 @@ def create_webapp_http_server(
 
     server = ThreadingHTTPServer((host, int(port)), WebAppRequestHandler)
     server.daemon_threads = True
+    setattr(server, "webapp_config", resolved_config)
     return server
 

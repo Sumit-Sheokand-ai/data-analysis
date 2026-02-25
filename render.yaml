@@ -41,4 +41,8 @@ services:
       - key: APP_DISABLE_LOCAL_PIPELINE_FALLBACK
         value: "1"
       - key: APP_PUBLIC_BASE_URL
-        value: https://syntellia.ca
+        value: https://www.syntellia.ca
+      - key: APP_CORS_ALLOWED_ORIGINS
+        value: https://www.syntellia.ca
+      - key: APP_CORS_ALLOW_CREDENTIALS
+        value: "1"

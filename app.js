@@ -5,6 +5,36 @@ const state = {
   optimizer: null,
 };
 
+function normalizeUrlBase(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+function readRuntimeConfig() {
+  const metaApiBase = document.querySelector('meta[name="api-base"]');
+  const configuredApiBase = normalizeUrlBase(metaApiBase ? metaApiBase.content : "");
+  if (configuredApiBase) {
+    return { apiBaseUrl: configuredApiBase };
+  }
+  const host = String(window.location.hostname || "").toLowerCase();
+  if (host.startsWith("www.")) {
+    return { apiBaseUrl: `${window.location.protocol}//api.${host.slice(4)}` };
+  }
+  return { apiBaseUrl: "" };
+}
+
+const runtimeConfig = readRuntimeConfig();
+const API_BASE_URL = runtimeConfig.apiBaseUrl;
+
+function apiUrl(path) {
+  const requestPath = String(path || "").trim();
+  if (!requestPath) return requestPath;
+  if (/^https?:\/\//i.test(requestPath)) return requestPath;
+  if (!requestPath.startsWith("/")) return requestPath;
+  return API_BASE_URL ? `${API_BASE_URL}${requestPath}` : requestPath;
+}
+
 function byId(id) {
   return document.getElementById(id);
 }
@@ -23,8 +53,8 @@ function setStatus(message, level = "info") {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
+  const response = await fetch(apiUrl(path), {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -316,6 +346,71 @@ function setLoginVisibility(showLogin) {
   byId("appSection").hidden = showLogin;
 }
 
+function setActionControlsEnabled(enabled) {
+  const refreshButton = byId("refreshButton");
+  const runPipelineButton = byId("runPipelineButton");
+  const pipelineMode = byId("pipelineMode");
+  const optimizerForm = byId("optimizerForm");
+  if (refreshButton) refreshButton.disabled = !enabled;
+  if (runPipelineButton) runPipelineButton.disabled = !enabled;
+  if (pipelineMode) pipelineMode.disabled = !enabled;
+  if (optimizerForm) {
+    Array.from(optimizerForm.elements || []).forEach((element) => {
+      element.disabled = !enabled;
+    });
+  }
+}
+
+function applyBackendUnavailableState(reasonMessage = "") {
+  const apiLocationHint = API_BASE_URL
+    ? `Backend API is not reachable at ${API_BASE_URL}.`
+    : "Backend API is not configured for this frontend origin.";
+  const message = `${apiLocationHint} Deploy backend on api subdomain and set the API base in index.html <meta name="api-base"> if needed.`;
+  state.auth = {
+    require_auth: false,
+    authenticated: false,
+    user_id: "guest",
+    workspace_id: "public-site",
+    role: "viewer",
+    plan: { display_name: "Frontend-only mode" },
+  };
+  state.dashboard = {
+    readiness: {
+      status: "blocked",
+      message: reasonMessage || message,
+      missing_outputs: [],
+      raw_files: [],
+    },
+    overview: {},
+    channel_performance: [],
+    alerts: [],
+    retention: [],
+    ltv_customers: [],
+    what_changed: {
+      overview_deltas: [],
+      cac_deltas: [],
+      ltv_cac_deltas: [],
+    },
+    recommendations: [],
+    optimizer_defaults: {
+      total_budget: 0,
+      target_max_cac: 0,
+      reserve_pct: 0,
+    },
+    billing: {
+      plan: { display_name: "N/A", monthly_price_usd: 0 },
+      usage: {},
+      report_exports_left: 0,
+    },
+  };
+  state.optimizer = null;
+  setLoginVisibility(false);
+  setAuthSummary(state.auth);
+  setActionControlsEnabled(false);
+  renderDashboard();
+  setStatus(reasonMessage || message, "warning");
+}
+
 async function loadSession() {
   const payload = await api("/api/auth/me");
   state.auth = {
@@ -329,6 +424,7 @@ async function loadSession() {
   setAuthSummary(state.auth);
   const needsLogin = state.auth.require_auth && !state.auth.authenticated;
   setLoginVisibility(needsLogin);
+  setActionControlsEnabled(!needsLogin);
   return !needsLogin;
 }
 
@@ -459,7 +555,12 @@ async function initialize() {
   } catch (err) {
     if (err.status === 401) {
       setLoginVisibility(true);
+      setActionControlsEnabled(false);
       setStatus("Sign in to continue.", "info");
+      return;
+    }
+    if (err.status === 404 || err.name === "TypeError") {
+      applyBackendUnavailableState(err.message || "");
       return;
     }
     setStatus(err.message || "Initialization failed.", "warning");

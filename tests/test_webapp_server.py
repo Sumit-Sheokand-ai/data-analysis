@@ -139,6 +139,8 @@ def _make_config(tmp_path: Path, *, require_auth: bool) -> WebAppConfig:
         default_plan="starter",
         workspace_plan_overrides={},
         basic_auth_users=users,
+        cors_allowed_origins=["http://127.0.0.1:3000"],
+        cors_allow_credentials=True,
         static_dir=Path(__file__).resolve().parents[1],
     )
 
