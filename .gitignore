@@ -13,6 +13,8 @@ env/
 
 # Environment files
 .env
+.env.secrets
+secrets.env
 
 # OS / editor
 .DS_Store

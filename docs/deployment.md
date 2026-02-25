@@ -7,15 +7,16 @@
 1. Frontend on GitHub Pages
    - Keep static files in repository root: `index.html`, `styles.css`, `app.js`.
    - In GitHub repository settings, enable Pages from the `main` branch root.
-   - Set your frontend domain to `www.<your-domain>` in Pages custom domain settings.
+   - Set your frontend domain to `<your-domain>` in Pages custom domain settings.
    - In `index.html`, set `<meta name="api-base" content="https://api.<your-domain>">` when backend domain is live.
 2. Backend on Render
    - Deploy this repository as a Render web service using `render.yaml`.
    - Confirm runtime command remains `python -m python.webapp.run_server --host 0.0.0.0 --port ${PORT}`.
    - Set backend custom domain to `api.<your-domain>`.
    - Add required secrets/environment values (see credentials section below).
+   - Use `.env` for non-sensitive values and `secrets.env` for sensitive values, then copy those values into Render Environment settings.
 3. Domain layout and DNS
-   - Point `www.<your-domain>` DNS to GitHub Pages.
+   - Point `<your-domain>` DNS to GitHub Pages.
    - Point `api.<your-domain>` DNS to Render service hostname.
    - Keep frontend and backend on HTTPS.
    - Set backend CORS allowed origins to frontend URL only.
@@ -89,8 +90,8 @@
 - `DATABASE_URL` (if using postgres mode)
 - `APP_SERVICE_AUTH_TOKEN`
 - `SERVICE_API_AUTH_TOKEN`
-- `APP_CORS_ALLOWED_ORIGINS` should include only your frontend origin, e.g. `https://www.syntellia.ca`
-- `APP_PUBLIC_BASE_URL` should point to frontend origin, e.g. `https://www.syntellia.ca`
+- `APP_CORS_ALLOWED_ORIGINS` should include only your frontend origin, e.g. `https://syntellia.ca`
+- `APP_PUBLIC_BASE_URL` should point to frontend origin, e.g. `https://syntellia.ca`
 ## Supabase database setup (Render backend)
 1. In Supabase, open **Project Settings -> Database** and copy your Postgres connection string.
 2. Prefer the Supabase pooler connection string for production traffic.
