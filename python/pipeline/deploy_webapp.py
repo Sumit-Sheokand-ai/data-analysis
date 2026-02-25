@@ -10,7 +10,6 @@ from python.analysis.pipeline import run_pipeline
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-APP_PATH = PROJECT_ROOT / "app" / "main.py"
 
 
 def _run_cmd(cmd: list[str]) -> None:
@@ -31,11 +30,13 @@ def run_local(port: int, refresh_data: bool, data_source: str, validation_mode: 
         _refresh_data(data_source=data_source, validation_mode=validation_mode)
     _run_cmd(
         [
-            "streamlit",
-            "run",
-            str(APP_PATH),
-            f"--server.port={port}",
-            "--server.address=0.0.0.0",
+            "python",
+            "-m",
+            "python.webapp.run_server",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(port),
         ]
     )
 

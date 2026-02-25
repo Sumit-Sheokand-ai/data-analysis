@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Syntellia — Marketing profitability analytics</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <h1>Syntellia</h1>
+        <p>Marketing profitability analytics</p>
+      </div>
+      <div class="account-block">
+        <div id="authSummary" class="auth-summary">Checking session...</div>
+        <button id="logoutButton" class="btn ghost" type="button" hidden>Sign out</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <section id="statusBanner" class="status-banner info" hidden></section>
+
+      <section id="loginSection" class="panel login-panel" hidden>
+        <h2>Sign in</h2>
+        <p>Use your workspace credentials to access Syntellia.</p>
+        <form id="loginForm" class="stack">
+          <label>
+            <span>Username</span>
+            <input id="loginUsername" type="text" autocomplete="username" required>
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="loginPassword" type="password" autocomplete="current-password" required>
+          </label>
+          <button class="btn primary" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="appSection" hidden>
+        <div class="toolbar panel">
+          <div class="left">
+            <button class="btn ghost" id="refreshButton" type="button">Refresh data</button>
+            <select id="pipelineMode">
+              <option value="warn" selected>Pipeline mode: warn</option>
+              <option value="strict">Pipeline mode: strict</option>
+            </select>
+            <button class="btn primary" id="runPipelineButton" type="button">Run pipeline</button>
+          </div>
+          <div class="right" id="pipelineResult"></div>
+        </div>
+
+        <nav class="tabs" id="tabs">
+          <button class="tab active" data-view="overview" type="button">Overview</button>
+          <button class="tab" data-view="channels" type="button">Channels</button>
+          <button class="tab" data-view="retention" type="button">Retention & LTV</button>
+          <button class="tab" data-view="alerts" type="button">Alerts</button>
+          <button class="tab" data-view="changed" type="button">What changed</button>
+          <button class="tab" data-view="optimizer" type="button">Optimizer</button>
+          <button class="tab" data-view="billing" type="button">Billing</button>
+          <button class="tab" data-view="readiness" type="button">Data status</button>
+        </nav>
+
+        <section id="view-overview" class="view active">
+          <div class="panel">
+            <h2>Executive overview</h2>
+            <p class="muted">Key business signals at a glance.</p>
+            <div id="overviewMetrics" class="metric-grid"></div>
+          </div>
+          <div class="panel">
+            <h3>Top actionable signals</h3>
+            <ul id="overviewSignals" class="list"></ul>
+          </div>
+        </section>
+
+        <section id="view-channels" class="view">
+          <div class="panel">
+            <h2>Channel performance</h2>
+            <p class="muted">Compare efficiency and expected value by channel.</p>
+            <div id="channelTable"></div>
+          </div>
+        </section>
+
+        <section id="view-retention" class="view">
+          <div class="panel">
+            <h2>Cohort retention</h2>
+            <p class="muted">Track cohort behavior over time.</p>
+            <div id="retentionTable"></div>
+          </div>
+          <div class="panel">
+            <h2>Customer LTV</h2>
+            <p class="muted">Top customer-level realized and predicted value rows.</p>
+            <div id="ltvTable"></div>
+          </div>
+        </section>
+
+        <section id="view-alerts" class="view">
+          <div class="panel">
+            <h2>Anomaly alerts</h2>
+            <p class="muted">Prioritized warning/error checks from latest outputs.</p>
+            <div id="alertTable"></div>
+          </div>
+        </section>
+
+        <section id="view-changed" class="view">
+          <div class="panel">
+            <h2>What changed (overview)</h2>
+            <p class="muted">Current snapshot versus previous saved snapshot.</p>
+            <div id="overviewDeltaTable"></div>
+          </div>
+          <div class="panel">
+            <h2>What changed (CAC)</h2>
+            <div id="cacDeltaTable"></div>
+          </div>
+          <div class="panel">
+            <h2>What changed (LTV:CAC)</h2>
+            <div id="ltvCacDeltaTable"></div>
+          </div>
+        </section>
+
+        <section id="view-optimizer" class="view">
+          <div class="panel">
+            <h2>Scenario optimizer</h2>
+            <p class="muted">Run constrained budget scenarios with one click.</p>
+            <form id="optimizerForm" class="form-inline">
+              <label>
+                <span>Total budget</span>
+                <input id="optimizerBudget" type="number" min="0" step="100" required>
+              </label>
+              <label>
+                <span>Target max CAC</span>
+                <input id="optimizerTargetCac" type="number" min="0" step="1" required>
+              </label>
+              <label>
+                <span>Reserve %</span>
+                <input id="optimizerReserve" type="number" min="0" max="95" step="1" required>
+              </label>
+              <button class="btn primary" type="submit">Run optimizer</button>
+            </form>
+            <div id="optimizerSummary" class="metric-grid"></div>
+            <div id="optimizerTable"></div>
+          </div>
+          <div class="panel">
+            <h2>Recommendations</h2>
+            <p class="muted">Automatically generated high-priority growth actions.</p>
+            <div id="recommendationTable"></div>
+          </div>
+        </section>
+
+        <section id="view-billing" class="view">
+          <div class="panel">
+            <h2>Billing & plan</h2>
+            <p class="muted">Current plan, limits, and usage counters.</p>
+            <div id="billingSummary" class="metric-grid"></div>
+            <div id="billingUsage"></div>
+          </div>
+        </section>
+
+        <section id="view-readiness" class="view">
+          <div class="panel">
+            <h2>Data readiness</h2>
+            <p class="muted">Understand what is blocking analytics and what to do next.</p>
+            <div id="readinessSummary"></div>
+            <div id="rawFileTable"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+

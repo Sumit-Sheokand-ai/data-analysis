@@ -3,7 +3,6 @@ numpy>=1.26.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
 python-dotenv>=1.0.1
-streamlit>=1.41.0
 plotly>=5.24.0
 lifetimes>=0.11.3
 pytest>=8.3.0

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import streamlit as st
 from typing import Any, Literal
+
+def _st():
+    import streamlit as st
+
+    return st
 
 
 def render_global_context_bar(
@@ -11,6 +15,7 @@ def render_global_context_bar(
     active_page: str,
     advanced_mode_enabled: bool,
 ) -> None:
+    st = _st()
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.caption("Workspace")
     c1.write(f"**{workspace_name or 'Default Workspace'}**")
@@ -25,10 +30,12 @@ def render_global_context_bar(
 
 
 def render_page_scaffold(page_name: str, section_name: str) -> None:
+    st = _st()
     st.caption(f"{section_name} / {page_name}")
 
 
 def render_section_header(title: str, helper_text: str = "") -> None:
+    st = _st()
     st.subheader(title)
     if helper_text.strip():
         st.caption(helper_text.strip())
@@ -37,12 +44,14 @@ def render_section_header(title: str, helper_text: str = "") -> None:
 def render_metric_strip(metrics: list[tuple[str, str]]) -> None:
     if not metrics:
         return
+    st = _st()
     columns = st.columns(len(metrics))
     for idx, (label, value) in enumerate(metrics):
         columns[idx].metric(str(label), str(value))
 
 
 def render_empty_state(message: str, next_action: str = "", level: Literal["info", "warning", "error"] = "info") -> None:
+    st = _st()
     msg = str(message).strip() or "No data available."
     if level == "error":
         st.error(msg)
@@ -61,6 +70,7 @@ def render_compact_dataframe(
     hide_index: bool = True,
     use_container_width: bool = True,
 ) -> None:
+    st = _st()
     if frame is None:
         st.info("No records available.")
         return
@@ -104,6 +114,7 @@ def build_readiness_summary(
 
 
 def render_readiness_panel(status: str, message: str, next_action: str = "") -> None:
+    st = _st()
     normalized = str(status).strip().lower()
     if normalized == "blocked":
         st.warning(message)

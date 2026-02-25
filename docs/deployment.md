@@ -1,6 +1,6 @@
 # Deployment notes (v1)
 ## Recommended stack
-- App: Streamlit Community Cloud
+- App: Browser-native Python web server (serving `web/index.html` + JSON APIs)
 - Database: Neon PostgreSQL
 - Orchestration: GitHub Actions cron
 
@@ -59,12 +59,13 @@
   - `PUT /usage` with body `{"usage_counters": {...}}`
 - Usage counters are now scoped by `workspace_id` (from `X-Workspace-Id` header or `workspace_id` query)
 
-## Streamlit deploy steps
+## Browser web app deploy steps
 1. Push repository to GitHub.
-2. Connect repository in Streamlit Community Cloud.
-3. Set app entrypoint to `app/main.py`.
-4. Add environment variables in Streamlit secrets.
-5. Trigger initial pipeline run and verify charts/kpis.
+2. Connect repository to your Docker-capable host (for example, Render web service).
+3. Ensure container starts with `python -m python.webapp.run_server --host 0.0.0.0 --port ${PORT}`.
+4. Set health check path to `/health`.
+5. Add environment variables and auth/service secrets.
+6. Trigger initial pipeline run and verify dashboard API/UX.
 
 ## Render custom domain (Syntellia)
 1. Open the web service in Render and go to **Settings → Custom Domains**.

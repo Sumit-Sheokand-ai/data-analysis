@@ -18,4 +18,4 @@ COPY . /app
 
 EXPOSE 8501
 
-CMD ["sh", "-c", "streamlit run app/main.py --server.port=${PORT:-8501} --server.address=0.0.0.0"]
+CMD ["sh", "-c", "python -m python.webapp.run_server --host 0.0.0.0 --port ${PORT:-8501}"]
