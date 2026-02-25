@@ -139,7 +139,7 @@ def _make_config(tmp_path: Path, *, require_auth: bool) -> WebAppConfig:
         default_plan="starter",
         workspace_plan_overrides={},
         basic_auth_users=users,
-        static_dir=Path(__file__).resolve().parents[1] / "web",
+        static_dir=Path(__file__).resolve().parents[1],
     )
 
 

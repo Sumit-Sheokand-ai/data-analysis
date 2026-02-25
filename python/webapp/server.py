@@ -229,7 +229,7 @@ def load_webapp_config(project_root: Path | None = None) -> WebAppConfig:
         default_plan=default_plan,
         workspace_plan_overrides=workspace_overrides,
         basic_auth_users=basic_users,
-        static_dir=root / "web",
+        static_dir=root,
     )
 
 

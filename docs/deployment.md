@@ -1,6 +1,6 @@
 # Deployment notes (v1)
 ## Recommended stack
-- App: Browser-native Python web server (serving `web/index.html` + JSON APIs)
+- App: Browser-native Python web server (serving root `index.html` + JSON APIs)
 - Database: Neon PostgreSQL
 - Orchestration: GitHub Actions cron
 
